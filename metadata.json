@@ -1,0 +1,6 @@
+{
+  "name": "Device Studio",
+  "description": "Professional 2D & 3D Device Mockup Editor, Video Simulation Studio, and Deterministic Frame Renderer",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

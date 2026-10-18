@@ -3,6 +3,60 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        try {
+          var currentFetch = window.fetch ? window.fetch.bind(window) : undefined;
+          var winDesc = Object.getOwnPropertyDescriptor(window, 'fetch');
+          var protoDesc = Object.getOwnPropertyDescriptor(Window.prototype, 'fetch');
+          if ((winDesc && !winDesc.set && !winDesc.writable) || (protoDesc && !protoDesc.set && !protoDesc.writable)) {
+            Object.defineProperty(window, 'fetch', {
+              configurable: true,
+              enumerable: true,
+              get: function () {
+                return currentFetch;
+              },
+              set: function (fn) {
+                if (typeof fn === 'function') {
+                  currentFetch = fn;
+                }
+              },
+            });
+          }
+        } catch (_) {}
+
+        window.addEventListener(
+          'error',
+          function (e) {
+            if (
+              (e.filename && e.filename.indexOf('chrome-extension://') === 0) ||
+              (e.message && e.message.indexOf('Cannot set property fetch of #<Window>') !== -1)
+            ) {
+              e.stopImmediatePropagation();
+              e.preventDefault();
+              return true;
+            }
+          },
+          true
+        );
+
+        window.addEventListener(
+          'unhandledrejection',
+          function (e) {
+            var msg = e.reason && (e.reason.stack || e.reason.message || String(e.reason));
+            if (
+              typeof msg === 'string' &&
+              (msg.indexOf('chrome-extension://') !== -1 ||
+                msg.indexOf('Cannot set property fetch of #<Window>') !== -1)
+            ) {
+              e.stopImmediatePropagation();
+              e.preventDefault();
+            }
+          },
+          true
+        );
+      })();
+    </script>
     <title>Device Studio — 2D & 3D Device Mockup & Video Simulation Studio</title>
     <meta name="description" content="Professional 2D & 3D Device Mockup Editor, Video Simulation Studio, and Deterministic Frame Renderer" />
     <meta property="og:title" content="Device Studio — 2D & 3D Device Mockup & Video Simulation Studio" />

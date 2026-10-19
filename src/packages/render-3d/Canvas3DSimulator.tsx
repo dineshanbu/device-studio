@@ -834,15 +834,15 @@ export const Canvas3DSimulator: React.FC = () => {
       />
 
       {/* Top-Left Minimal Spec Header */}
-      <div className="absolute top-3 left-4 z-10 pointer-events-none flex items-center gap-2 text-xs text-slate-400 bg-[#0E131F] border border-slate-800 rounded-md px-3 py-1.5">
-        <span className="font-medium text-slate-200">3D PBR Simulator</span>
+      <div className="absolute top-3 left-4 z-10 pointer-events-none flex items-center gap-2 text-xs text-slate-600 bg-white/95 border border-slate-200 rounded-md px-3 py-1.5 shadow-sm">
+        <span className="font-semibold text-slate-900">3D PBR Simulator</span>
         <span aria-hidden="true">·</span>
         <span className="font-mono tabular-nums">
           FOV {studio3D.fov}° · {storeState.devices.filter((d) => d.visible).length} Active Meshes
         </span>
       </div>
 
-      {/* Unified Collapsible Bottom Control Dock (Zero Viewport Occlusion, No backdrop-filter) */}
+      {/* Unified Collapsible Bottom Control Dock */}
       <div
         style={{
           bottom: '16px',
@@ -856,26 +856,26 @@ export const Canvas3DSimulator: React.FC = () => {
           type="button"
           onClick={() => setDockCollapsed((prev) => !prev)}
           aria-label={dockCollapsed ? 'Show 3D Studio Controls' : 'Hide 3D Studio Controls'}
-          className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-medium text-slate-300 bg-[#111726] border border-b-0 border-slate-800 rounded-t-lg hover:text-white transition-colors whitespace-nowrap shrink-0"
+          className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-medium text-slate-700 bg-white border border-b-0 border-slate-200 rounded-t-lg hover:text-slate-900 transition-colors whitespace-nowrap shrink-0 shadow-xs"
         >
           {dockCollapsed ? (
             <>
-              <ChevronUp className="w-3.5 h-3.5 text-sky-400" />
+              <ChevronUp className="w-3.5 h-3.5 text-blue-600" />
               Show Controls (H)
             </>
           ) : (
             <>
-              <ChevronDown className="w-3.5 h-3.5 text-sky-400" />
+              <ChevronDown className="w-3.5 h-3.5 text-blue-600" />
               Hide Controls (H)
             </>
           )}
         </button>
 
         {!dockCollapsed && (
-          <div className="flex flex-wrap items-center justify-center gap-4 px-4 py-2.5 bg-[#111726] border border-slate-800 rounded-xl shadow-2xl">
+          <div className="flex flex-wrap items-center justify-center gap-4 px-4 py-2.5 bg-white border border-slate-200 rounded-xl shadow-lg">
             {/* Camera Presets */}
             <div className="flex items-center gap-1">
-              <Camera className="w-3.5 h-3.5 text-slate-400 mr-1" />
+              <Camera className="w-3.5 h-3.5 text-slate-500 mr-1" />
               {cameraPresets.map((cp) => (
                 <button
                   key={cp.id}
@@ -883,8 +883,8 @@ export const Canvas3DSimulator: React.FC = () => {
                   onClick={() => setCameraPreset3D(cp.id)}
                   className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap shrink-0 ${
                     studio3D.cameraPreset === cp.id
-                      ? 'bg-sky-500 text-slate-950 font-semibold'
-                      : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                      ? 'bg-blue-600 text-white font-semibold shadow-xs'
+                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                   }`}
                 >
                   {cp.label}
@@ -892,11 +892,11 @@ export const Canvas3DSimulator: React.FC = () => {
               ))}
             </div>
 
-            <div className="w-px h-5 bg-slate-800" />
+            <div className="w-px h-5 bg-slate-200" />
 
             {/* Exploded View Slider */}
-            <label className="flex items-center gap-2 text-xs text-slate-300 whitespace-nowrap shrink-0">
-              <Layers className="w-3.5 h-3.5 text-sky-400" />
+            <label className="flex items-center gap-2 text-xs text-slate-700 whitespace-nowrap shrink-0">
+              <Layers className="w-3.5 h-3.5 text-blue-600" />
               <span>Exploded View</span>
               <input
                 type="range"
@@ -908,15 +908,15 @@ export const Canvas3DSimulator: React.FC = () => {
                   updateStudio3D({ explodedView: parseFloat(e.target.value) })
                 }
                 aria-label="Exploded View Separation"
-                className="w-20 accent-sky-400 cursor-pointer"
+                className="w-20 accent-blue-600 cursor-pointer"
               />
             </label>
 
-            <div className="w-px h-5 bg-slate-800" />
+            <div className="w-px h-5 bg-slate-200" />
 
             {/* Studio Key Light & Auto Orbit */}
-            <label className="flex items-center gap-2 text-xs text-slate-300 whitespace-nowrap shrink-0">
-              <Sun className="w-3.5 h-3.5 text-amber-400" />
+            <label className="flex items-center gap-2 text-xs text-slate-700 whitespace-nowrap shrink-0">
+              <Sun className="w-3.5 h-3.5 text-amber-500" />
               <span>Key Light</span>
               <input
                 type="range"
@@ -928,7 +928,7 @@ export const Canvas3DSimulator: React.FC = () => {
                   updateStudio3D({ keyLightIntensity: parseFloat(e.target.value) })
                 }
                 aria-label="Key Light Intensity"
-                className="w-16 accent-sky-400 cursor-pointer"
+                className="w-16 accent-blue-600 cursor-pointer"
               />
             </label>
 
@@ -937,8 +937,8 @@ export const Canvas3DSimulator: React.FC = () => {
               onClick={() => updateStudio3D({ autoOrbit: !studio3D.autoOrbit })}
               className={`px-2.5 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
                 studio3D.autoOrbit
-                  ? 'bg-sky-500/20 border-sky-500/50 text-sky-300'
-                  : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                  ? 'bg-blue-50 border-blue-300 text-blue-700'
+                  : 'border-slate-200 text-slate-600 hover:bg-slate-100'
               }`}
             >
               {studio3D.autoOrbit ? 'Turntable On' : 'Turntable Off'}
@@ -956,7 +956,7 @@ export const Canvas3DSimulator: React.FC = () => {
                 });
               }}
               aria-label="Reset 3D Camera"
-              className="p-1.5 text-slate-400 hover:text-white rounded-md hover:bg-slate-800 transition-colors"
+              className="p-1.5 text-slate-500 hover:text-slate-900 rounded-md hover:bg-slate-100 transition-colors"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>

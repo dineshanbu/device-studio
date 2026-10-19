@@ -1,6 +1,7 @@
 import type {
   AnimatablePropertyKey,
   AnimationPresetId,
+  CustomBezierControlPoints,
   EasingType,
   ExportSettings,
   Keyframe,
@@ -12,10 +13,166 @@ import type {
   TimelineClip,
 } from '../shared/types.ts';
 
+export const DEFAULT_CUSTOM_BEZIER_POINTS: CustomBezierControlPoints = {
+  x1: 0.25,
+  y1: 0.85,
+  x2: 0.35,
+  y2: 1.0,
+};
+
+export function clampCustomBezierPoints(
+  pts?: Partial<CustomBezierControlPoints> | null
+): CustomBezierControlPoints {
+  const raw = pts || DEFAULT_CUSTOM_BEZIER_POINTS;
+  const clampX = (v: number, fallback: number) =>
+    Number(
+      Math.max(0, Math.min(1, Number.isFinite(v) ? v : fallback)).toFixed(2)
+    );
+  const clampY = (v: number, fallback: number) =>
+    Number(
+      Math.max(-0.5, Math.min(1.5, Number.isFinite(v) ? v : fallback)).toFixed(
+        2
+      )
+    );
+  return {
+    x1: clampX(raw.x1 as number, DEFAULT_CUSTOM_BEZIER_POINTS.x1),
+    y1: clampY(raw.y1 as number, DEFAULT_CUSTOM_BEZIER_POINTS.y1),
+    x2: clampX(raw.x2 as number, DEFAULT_CUSTOM_BEZIER_POINTS.x2),
+    y2: clampY(raw.y2 as number, DEFAULT_CUSTOM_BEZIER_POINTS.y2),
+  };
+}
+
+/**
+ * Evaluates a standard CSS-style cubic-bezier(x1, y1, x2, y2) curve at time t in [0, 1].
+ * Uses Newton-Raphson with bisection fallback to solve Bx(u) = t, then returns By(u).
+ */
+export function evaluateCubicBezier(
+  t: number,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number
+): number {
+  const clampedT = Math.max(0, Math.min(1, t));
+  if (clampedT <= 0) return 0;
+  if (clampedT >= 1) return 1;
+
+  const cx1 = Math.max(0, Math.min(1, Number.isFinite(x1) ? x1 : 0.25));
+  const cx2 = Math.max(0, Math.min(1, Number.isFinite(x2) ? x2 : 0.35));
+  const cy1 = Math.max(-0.5, Math.min(1.5, Number.isFinite(y1) ? y1 : 0.85));
+  const cy2 = Math.max(-0.5, Math.min(1.5, Number.isFinite(y2) ? y2 : 1.0));
+
+  if (Math.abs(cx1 - cy1) < 1e-4 && Math.abs(cx2 - cy2) < 1e-4) {
+    return clampedT;
+  }
+
+  const sampleCurveX = (u: number) => {
+    const inv = 1 - u;
+    return 3 * inv * inv * u * cx1 + 3 * inv * u * u * cx2 + u * u * u;
+  };
+
+  const sampleCurveDerivativeX = (u: number) => {
+    const inv = 1 - u;
+    return (
+      3 * inv * inv * cx1 + 6 * inv * u * (cx2 - cx1) + 3 * u * u * (1 - cx2)
+    );
+  };
+
+  const sampleCurveY = (u: number) => {
+    const inv = 1 - u;
+    return 3 * inv * inv * u * cy1 + 3 * inv * u * u * cy2 + u * u * u;
+  };
+
+  // Newton-Raphson iteration
+  let u = clampedT;
+  for (let i = 0; i < 6; i++) {
+    const err = sampleCurveX(u) - clampedT;
+    if (Math.abs(err) < 1e-5) break;
+    const d = sampleCurveDerivativeX(u);
+    if (Math.abs(d) < 1e-5) break;
+    u = Math.max(0, Math.min(1, u - err / d));
+  }
+
+  // Bisection refinement if needed
+  if (Math.abs(sampleCurveX(u) - clampedT) > 1e-4) {
+    let lo = 0;
+    let hi = 1;
+    u = clampedT;
+    for (let i = 0; i < 10; i++) {
+      const x = sampleCurveX(u);
+      if (Math.abs(x - clampedT) < 1e-5) break;
+      if (clampedT > x) {
+        lo = u;
+      } else {
+        hi = u;
+      }
+      u = 0.5 * (lo + hi);
+    }
+  }
+
+  return sampleCurveY(u);
+}
+
+/**
+ * Fits a smooth cubic-bezier(x1, y1, x2, y2) curve to a sequence of normalized stroke points
+ * drawn by the user on the Custom Path canvas.
+ */
+export function fitCubicBezierFromStroke(
+  points: { x: number; y: number }[]
+): CustomBezierControlPoints {
+  if (!points || points.length === 0) {
+    return { ...DEFAULT_CUSTOM_BEZIER_POINTS };
+  }
+  if (points.length === 1) {
+    const pt = points[0];
+    return clampCustomBezierPoints({
+      x1: pt.x * 0.65,
+      y1: pt.y,
+      x2: Math.min(1, pt.x + 0.25),
+      y2: Math.min(1.35, pt.y * 0.8 + 0.2),
+    });
+  }
+
+  const sorted = [...points].sort((a, b) => a.x - b.x);
+  const sampleAtX = (targetX: number) => {
+    for (let i = 0; i < sorted.length - 1; i++) {
+      const a = sorted[i];
+      const b = sorted[i + 1];
+      if (targetX >= a.x && targetX <= b.x) {
+        const span = b.x - a.x;
+        const ratio = span > 1e-4 ? (targetX - a.x) / span : 0.5;
+        return {
+          x: targetX,
+          y: a.y + (b.y - a.y) * ratio,
+        };
+      }
+    }
+    const idx = Math.min(
+      sorted.length - 1,
+      Math.max(0, Math.round(targetX * (sorted.length - 1)))
+    );
+    return sorted[idx];
+  };
+
+  const q1 = sampleAtX(1 / 3);
+  const q2 = sampleAtX(2 / 3);
+
+  const x1 = 3 * q1.x - 1.5 * q2.x + 1 / 3;
+  const y1 = 3 * q1.y - 1.5 * q2.y + 1 / 3;
+  const x2 = 3 * q2.x - 1.5 * q1.x - 5 / 6;
+  const y2 = 3 * q2.y - 1.5 * q1.y - 5 / 6;
+
+  return clampCustomBezierPoints({ x1, y1, x2, y2 });
+}
+
 /**
  * Evaluates normalized progress t in [0, 1] using the chosen easing curve.
  */
-export function evaluateEasing(t: number, easing: EasingType): number {
+export function evaluateEasing(
+  t: number,
+  easing: EasingType,
+  customBezier?: CustomBezierControlPoints
+): number {
   const clamped = Math.max(0, Math.min(1, t));
   switch (easing) {
     case 'linear':
@@ -41,6 +198,10 @@ export function evaluateEasing(t: number, easing: EasingType): number {
           Math.sin(((clamped * 9 - 0.75) * (2 * Math.PI)) / 3) +
         1
       );
+    }
+    case 'custom-path': {
+      const pts = clampCustomBezierPoints(customBezier);
+      return evaluateCubicBezier(clamped, pts.x1, pts.y1, pts.x2, pts.y2);
     }
     default:
       return clamped;
@@ -217,7 +378,8 @@ export function isPropertyAnimated(
  */
 export function interpolateTrackAtFrame(
   keyframes: Keyframe[],
-  frame: number
+  frame: number,
+  fallbackCustomBezier?: CustomBezierControlPoints
 ): Keyframe['properties'] {
   if (!keyframes || keyframes.length === 0) {
     return {};
@@ -242,7 +404,11 @@ export function interpolateTrackAtFrame(
     if (prevKf && nextKf) {
       const span = nextKf.frame - prevKf.frame;
       const rawT = span > 0 ? (frame - prevKf.frame) / span : 0;
-      const easedT = evaluateEasing(rawT, nextKf.easing);
+      const easedT = evaluateEasing(
+        rawT,
+        nextKf.easing,
+        nextKf.customBezier || fallbackCustomBezier
+      );
       const startVal = prevKf.properties[key] as number;
       const endVal = nextKf.properties[key] as number;
       result[key] = startVal + (endVal - startVal) * easedT;
@@ -270,7 +436,11 @@ export function interpolateTrackAtFrame(
     if (prevKf && nextKf) {
       const span = nextKf.frame - prevKf.frame;
       const rawT = span > 0 ? (frame - prevKf.frame) / span : 0;
-      const easedT = evaluateEasing(rawT, nextKf.easing);
+      const easedT = evaluateEasing(
+        rawT,
+        nextKf.easing,
+        nextKf.customBezier || fallbackCustomBezier
+      );
       result[cKey] = interpolateHexColor(
         prevKf.properties[cKey] as string,
         nextKf.properties[cKey] as string,
@@ -362,6 +532,23 @@ export function evaluateAnimatedGlowState(
 }
 
 /**
+ * Converts a transition Start Delay value (in ms, or small frame offset) into timeline frames.
+ */
+export function computeTransitionDelayFrames(
+  delayMs: number | undefined,
+  fps = 30,
+  durationInFrames = 180
+): number {
+  const raw = Number(delayMs ?? 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  const maxOffset = Math.max(0, durationInFrames - 6);
+  if (raw < 50) {
+    return Math.min(maxOffset, Math.max(1, Math.round(raw)));
+  }
+  return Math.min(maxOffset, Math.max(1, Math.round((raw / 1000) * fps)));
+}
+
+/**
  * Applies deterministic entrance, exit, and multi-property keyframe animations to a device at `frame`.
  */
 export function resolveDeviceAtFrame(
@@ -370,9 +557,88 @@ export function resolveDeviceAtFrame(
   frame: number,
   durationInFrames: number
 ): SceneDeviceObject {
-  const interpolated = interpolateTrackAtFrame(keyframes, frame);
+  const isLoopTransition = Boolean(
+    device.activeTransitionLoop ?? device.effects.loopTransition
+  );
+  const startDelayMs =
+    device.activeTransitionStartDelayMs ??
+    device.effects.transitionStartDelayMs ??
+    0;
+  const delayFrames = computeTransitionDelayFrames(
+    startDelayMs,
+    30,
+    durationInFrames
+  );
+
+  let effectiveKeyframes = keyframes;
+  let effectiveFrame = frame;
+
+  if (keyframes && keyframes.length >= 2) {
+    const sortedInitial = [...keyframes].sort((a, b) => a.frame - b.frame);
+    if (delayFrames > 0 && sortedInitial[0].frame === 0) {
+      effectiveFrame = Math.max(0, frame - delayFrames);
+    }
+  }
+
+  if (isLoopTransition && keyframes && keyframes.length >= 2) {
+    const sortedKfs = [...keyframes].sort((a, b) => a.frame - b.frame);
+    const cycleStart = sortedKfs[0].frame;
+    const fullSpan = Math.max(
+      2,
+      sortedKfs[sortedKfs.length - 1].frame - cycleStart
+    );
+    const hasTrailingHold =
+      sortedKfs.length >= 3 &&
+      JSON.stringify(sortedKfs[sortedKfs.length - 1].properties) ===
+        JSON.stringify(sortedKfs[sortedKfs.length - 2].properties);
+    const rawSpan =
+      device.activeTransitionDurationMs !== undefined
+        ? Math.max(
+            2,
+            Math.round((device.activeTransitionDurationMs / 1000) * 30)
+          )
+        : hasTrailingHold
+          ? Math.max(2, sortedKfs[sortedKfs.length - 2].frame - cycleStart)
+          : fullSpan < Math.max(30, durationInFrames - 1)
+            ? fullSpan
+            : Math.min(30, Math.max(2, Math.round(durationInFrames / 6)));
+
+    const firstCycleKfs = sortedKfs.filter(
+      (k) => k.frame <= cycleStart + rawSpan
+    );
+
+    if (effectiveFrame >= cycleStart) {
+      if (firstCycleKfs.length >= 2) {
+        const cycleSpan = Math.max(2, rawSpan);
+        effectiveFrame =
+          cycleStart + ((effectiveFrame - cycleStart) % cycleSpan);
+        effectiveKeyframes = firstCycleKfs;
+      } else {
+        const cycleSpan = Math.max(2, rawSpan);
+        const cycleProgress =
+          ((effectiveFrame - cycleStart) % cycleSpan) / cycleSpan;
+        effectiveFrame = cycleStart + cycleProgress * fullSpan;
+        effectiveKeyframes = sortedKfs;
+      }
+    }
+  }
+
+  const deviceCustomBezier =
+    device.activeTransitionCustomBezier || device.effects.customBezierPoints;
+  const interpolated = interpolateTrackAtFrame(
+    effectiveKeyframes,
+    effectiveFrame,
+    deviceCustomBezier
+  );
   const resolvedEffects: ObjectEffects = {
     ...device.effects,
+    loopTransition: isLoopTransition,
+    customBezierPoints: deviceCustomBezier,
+    transitionStartDelayMs: startDelayMs,
+    transitionRotation:
+      device.activeTransitionRotation ?? device.effects.transitionRotation,
+    transitionScale:
+      device.activeTransitionScale ?? device.effects.transitionScale,
     glowBlur: interpolated.glowBlur ?? device.effects.glowBlur,
     glowIntensity: interpolated.glowIntensity ?? device.effects.glowIntensity,
     glowColor: interpolated.glowColor ?? device.effects.glowColor,
@@ -382,6 +648,13 @@ export function resolveDeviceAtFrame(
 
   const resolved: SceneDeviceObject = {
     ...device,
+    activeTransitionLoop: isLoopTransition,
+    activeTransitionCustomBezier: deviceCustomBezier,
+    activeTransitionStartDelayMs: startDelayMs,
+    activeTransitionRotation:
+      device.activeTransitionRotation ?? device.effects.transitionRotation,
+    activeTransitionScale:
+      device.activeTransitionScale ?? device.effects.transitionScale,
     x: interpolated.x ?? device.x,
     y: interpolated.y ?? device.y,
     scaleX: interpolated.scaleX ?? device.scaleX,
@@ -399,44 +672,237 @@ export function resolveDeviceAtFrame(
     effects: resolvedEffects,
   };
 
-  const entranceSpan = Math.min(24, Math.floor(durationInFrames * 0.25));
+  const entranceSpan =
+    device.activeTransitionDurationMs !== undefined
+      ? Math.max(
+          2,
+          Math.min(
+            durationInFrames - 1,
+            Math.round((device.activeTransitionDurationMs / 1000) * 30)
+          )
+        )
+      : Math.min(30, Math.floor(durationInFrames * 0.25));
+  const rawEntFrame = Math.max(0, frame - delayFrames);
+  const entFrame = isLoopTransition
+    ? frame < delayFrames
+      ? 0
+      : rawEntFrame % Math.max(1, entranceSpan)
+    : rawEntFrame;
   if (
     device.effects.entranceAnimation !== 'none' &&
-    frame < entranceSpan &&
+    (isLoopTransition || frame < delayFrames + entranceSpan) &&
     entranceSpan > 0
   ) {
-    const t = evaluateEasing(frame / entranceSpan, 'ease-out');
-    const visOpacity = 0.25 + 0.75 * t;
-    if (device.effects.entranceAnimation === 'fade-up') {
+    const entEasing = device.effects.entranceEasing || 'cubic-bezier';
+    const t =
+      frame < delayFrames
+        ? 0
+        : evaluateEasing(
+            Math.min(1, entFrame / entranceSpan),
+            entEasing,
+            deviceCustomBezier
+          );
+    const ent = device.effects.entranceAnimation;
+    const defaultStartOp = ent === 'fade-in' ? 0 : 0.1;
+    const startOp = Math.max(
+      0,
+      Math.min(
+        1,
+        device.activeTransitionStartOpacity ??
+          device.effects.transitionStartOpacity ??
+          defaultStartOp
+      )
+    );
+    const endOp = Math.max(
+      0,
+      Math.min(
+        1,
+        device.activeTransitionEndOpacity ??
+          device.effects.transitionEndOpacity ??
+          1
+      )
+    );
+    const visOpacity = startOp + (endOp - startOp) * t;
+    if (ent === 'fade-in') {
       resolved.opacity *= visOpacity;
-      resolved.y += (1 - t) * 60;
-    } else if (device.effects.entranceAnimation === 'scale-pop') {
+    } else if (ent === 'fade-up') {
       resolved.opacity *= visOpacity;
-      resolved.scaleX *= 0.75 + 0.25 * t;
-      resolved.scaleY *= 0.75 + 0.25 * t;
-    } else if (device.effects.entranceAnimation === 'slide-left') {
+      resolved.y += (1 - t) * 75;
+    } else if (ent === 'scale-pop' || ent === 'zoom-in') {
       resolved.opacity *= visOpacity;
-      resolved.x += (1 - t) * 120;
-    } else if (device.effects.entranceAnimation === 'rotate-3d') {
+      resolved.scaleX *= 0.6 + 0.4 * t;
+      resolved.scaleY *= 0.6 + 0.4 * t;
+    } else if (ent === 'zoom-out') {
       resolved.opacity *= visOpacity;
-      resolved.rotation3DY += (1 - t) * 35;
+      resolved.scaleX *= 1.38 - 0.38 * t;
+      resolved.scaleY *= 1.38 - 0.38 * t;
+    } else if (ent === 'slide-left') {
+      resolved.opacity *= visOpacity;
+      resolved.x += (1 - t) * 280;
+    } else if (ent === 'slide-right') {
+      resolved.opacity *= visOpacity;
+      resolved.x -= (1 - t) * 280;
+    } else if (ent === 'slide-up') {
+      resolved.opacity *= visOpacity;
+      resolved.y += (1 - t) * 220;
+    } else if (ent === 'slide-down') {
+      resolved.opacity *= visOpacity;
+      resolved.y -= (1 - t) * 220;
+    } else if (ent === 'rotate-3d') {
+      resolved.opacity *= visOpacity;
+      resolved.rotation3DY += (1 - t) * 48;
+      resolved.rotation3DX += (1 - t) * 16;
+    }
+
+    const transRotDeg =
+      device.activeTransitionRotation ?? device.effects.transitionRotation;
+    if (transRotDeg !== undefined && transRotDeg !== 0) {
+      resolved.rotation += (1 - t) * Math.max(0, Math.min(360, transRotDeg));
+    }
+
+    const transScalePct =
+      device.activeTransitionScale ?? device.effects.transitionScale;
+    if (transScalePct !== undefined && transScalePct !== 100) {
+      const startMult = Math.max(0, Math.min(2, transScalePct / 100));
+      const scaleFactor = startMult + (1 - startMult) * t;
+      resolved.scaleX *= scaleFactor;
+      resolved.scaleY *= scaleFactor;
     }
   }
 
-  const exitSpan = Math.min(20, Math.floor(durationInFrames * 0.2));
+  const exitSpan = Math.min(24, Math.floor(durationInFrames * 0.2));
   const exitStart = durationInFrames - exitSpan;
+  const extProgressFrame = isLoopTransition
+    ? frame % Math.max(1, exitSpan)
+    : frame - exitStart;
   if (
     device.effects.exitAnimation !== 'none' &&
-    frame > exitStart &&
+    (isLoopTransition || frame > exitStart) &&
     exitSpan > 0
   ) {
-    const t = evaluateEasing((frame - exitStart) / exitSpan, 'ease-in');
-    if (device.effects.exitAnimation === 'fade-out') {
-      resolved.opacity *= 1 - t;
-    } else if (device.effects.exitAnimation === 'scale-down') {
-      resolved.opacity *= 1 - t;
-      resolved.scaleX *= 1 - 0.35 * t;
-      resolved.scaleY *= 1 - 0.35 * t;
+    const extEasing = device.effects.exitEasing || 'ease-in';
+    const t = evaluateEasing(
+      extProgressFrame / exitSpan,
+      extEasing,
+      deviceCustomBezier
+    );
+    const ext = device.effects.exitAnimation;
+    const exitStartOp = Math.max(
+      0,
+      Math.min(
+        1,
+        device.activeTransitionStartOpacity ??
+          device.effects.transitionStartOpacity ??
+          1
+      )
+    );
+    const exitEndOp = Math.max(
+      0,
+      Math.min(
+        1,
+        device.activeTransitionEndOpacity ??
+          device.effects.transitionEndOpacity ??
+          0
+      )
+    );
+    const exitOpacityFactor = exitStartOp + (exitEndOp - exitStartOp) * t;
+    if (ext === 'fade-out') {
+      resolved.opacity *= exitOpacityFactor;
+    } else if (ext === 'scale-down') {
+      resolved.opacity *= exitOpacityFactor;
+      resolved.scaleX *= 1 - 0.38 * t;
+      resolved.scaleY *= 1 - 0.38 * t;
+    } else if (ext === 'zoom-out') {
+      resolved.opacity *= exitOpacityFactor;
+      resolved.scaleX *= 1 + 0.45 * t;
+      resolved.scaleY *= 1 + 0.45 * t;
+    } else if (ext === 'slide-left') {
+      resolved.opacity *= exitOpacityFactor;
+      resolved.x -= 280 * t;
+    } else if (ext === 'slide-right') {
+      resolved.opacity *= exitOpacityFactor;
+      resolved.x += 280 * t;
+    } else if (ext === 'slide-down') {
+      resolved.opacity *= exitOpacityFactor;
+      resolved.y += 220 * t;
+    }
+  }
+
+  const isMotionBlurEnabled = Boolean(
+    device.activeTransitionMotionBlur ?? device.effects.motionBlur
+  );
+  const motionBlurIntensity = Math.max(
+    0,
+    Math.min(
+      1,
+      device.activeTransitionMotionBlurIntensity ??
+        device.effects.motionBlurIntensity ??
+        (isMotionBlurEnabled ? 0.5 : 0)
+    )
+  );
+  resolved.effects.motionBlur = isMotionBlurEnabled;
+  resolved.effects.motionBlurIntensity = motionBlurIntensity;
+
+  if (isMotionBlurEnabled && motionBlurIntensity > 0) {
+    const adjFrame =
+      frame > 0 ? frame - 1 : Math.min(durationInFrames, frame + 1);
+    const adjInterp = interpolateTrackAtFrame(keyframes, adjFrame);
+    const dx = Math.abs(
+      (interpolated.x ?? device.x) - (adjInterp.x ?? device.x)
+    );
+    const dy = Math.abs(
+      (interpolated.y ?? device.y) - (adjInterp.y ?? device.y)
+    );
+    const dScale =
+      Math.abs(
+        (interpolated.scaleX ?? device.scaleX) -
+          (adjInterp.scaleX ?? device.scaleX)
+      ) * 320;
+    const dRot =
+      (Math.abs(
+        (interpolated.rotation ?? device.rotation) -
+          (adjInterp.rotation ?? device.rotation)
+      ) +
+        Math.abs(
+          (interpolated.rotation3DX ?? device.rotation3DX) -
+            (adjInterp.rotation3DX ?? device.rotation3DX)
+        ) +
+        Math.abs(
+          (interpolated.rotation3DY ?? device.rotation3DY) -
+            (adjInterp.rotation3DY ?? device.rotation3DY)
+        )) *
+      3.5;
+    const velocityFactor = Math.min(1, Math.hypot(dx, dy, dScale, dRot) / 18);
+
+    const inEntranceWindow =
+      (device.effects.entranceAnimation !== 'none' ||
+        Boolean(device.activeTransitionPresetId)) &&
+      frame < entranceSpan &&
+      entranceSpan > 0;
+    const inExitWindow =
+      device.effects.exitAnimation !== 'none' &&
+      frame > exitStart &&
+      exitSpan > 0;
+
+    let windowEnvelope = 0;
+    if (inEntranceWindow) {
+      windowEnvelope = Math.max(
+        0.25,
+        Math.sin((frame / Math.max(1, entranceSpan)) * Math.PI)
+      );
+    } else if (inExitWindow) {
+      windowEnvelope = Math.max(
+        0.25,
+        Math.sin(((frame - exitStart) / Math.max(1, exitSpan)) * Math.PI)
+      );
+    }
+
+    const effectiveEnvelope = Math.max(velocityFactor, windowEnvelope);
+    if (effectiveEnvelope > 0.01) {
+      const addedBlurPx = Number(
+        (motionBlurIntensity * 14 * effectiveEnvelope).toFixed(2)
+      );
+      resolved.effects.blur = (device.effects.blur || 0) + addedBlurPx;
     }
   }
 
@@ -772,18 +1238,253 @@ export function resolveActiveClipForMediaAtFrame(
   };
 }
 
+export interface TransitionPresetOptions {
+  startFrame?: number;
+  transitionDurationFrames?: number;
+  easing?: EasingType;
+  customBezier?: CustomBezierControlPoints;
+  startOpacity?: number;
+  endOpacity?: number;
+  transitionRotation?: number;
+  transitionScale?: number;
+  loopTransition?: boolean;
+}
+
 /**
- * Generates real editable keyframes on a device track for a ready-made animation preset.
+ * Generates real editable keyframes on a device track for a ready-made transition or animation preset.
  */
 export function generateKeyframesForPreset(
   presetId: AnimationPresetId,
   device: SceneDeviceObject,
-  durationInFrames: number
+  durationInFrames: number,
+  options?: TransitionPresetOptions
+): Keyframe[] {
+  const rawKfs = buildRawKeyframesForPreset(
+    presetId,
+    device,
+    durationInFrames,
+    options
+  );
+  const resolvedCustomBezier =
+    options?.customBezier ??
+    device.activeTransitionCustomBezier ??
+    device.effects.customBezierPoints;
+  const startOpOverride =
+    options?.startOpacity ?? device.activeTransitionStartOpacity;
+  const endOpOverride =
+    options?.endOpacity ?? device.activeTransitionEndOpacity;
+  const rotationOverride =
+    options?.transitionRotation ??
+    device.activeTransitionRotation ??
+    device.effects.transitionRotation;
+  const scaleOverride =
+    options?.transitionScale ??
+    device.activeTransitionScale ??
+    device.effects.transitionScale;
+
+  const clampOp = (v: number) =>
+    Number(Math.max(0, Math.min(1, v)).toFixed(2));
+
+  let singlePassKfs: Keyframe[];
+
+  if (
+    (startOpOverride === undefined && endOpOverride === undefined) ||
+    rawKfs.length === 0
+  ) {
+    singlePassKfs = rawKfs;
+  } else if (rawKfs.length === 1) {
+    const val = clampOp(
+      endOpOverride ?? startOpOverride ?? rawKfs[0].properties.opacity ?? 1
+    );
+    singlePassKfs = [
+      {
+        ...rawKfs[0],
+        properties: { ...rawKfs[0].properties, opacity: val },
+      },
+    ];
+  } else {
+    const resolvedStart =
+      startOpOverride !== undefined
+        ? clampOp(startOpOverride)
+        : (rawKfs[0].properties.opacity ?? 0);
+    const resolvedEnd =
+      endOpOverride !== undefined
+        ? clampOp(endOpOverride)
+        : (rawKfs[rawKfs.length - 1].properties.opacity ?? 1);
+
+    if (presetId === 'fade-in-out' && rawKfs.length >= 4) {
+      singlePassKfs = rawKfs.map((kf, idx) => ({
+        ...kf,
+        properties: {
+          ...kf.properties,
+          opacity:
+            idx === 0 || idx === rawKfs.length - 1
+              ? resolvedStart
+              : resolvedEnd,
+        },
+      }));
+    } else {
+      singlePassKfs = rawKfs.map((kf, idx) => ({
+        ...kf,
+        properties: {
+          ...kf.properties,
+          opacity: idx === 0 ? resolvedStart : resolvedEnd,
+        },
+      }));
+    }
+  }
+
+  const isExitPreset =
+    presetId === 'fade-out' ||
+    presetId === 'slide-out' ||
+    presetId === 'zoom-punch-out';
+
+  if (rotationOverride !== undefined && singlePassKfs.length >= 2) {
+    const clampedRot = Math.max(
+      0,
+      Math.min(360, Math.round(Number(rotationOverride) || 0))
+    );
+    const baseRot = device.rotation || 0;
+    singlePassKfs = singlePassKfs.map((kf, idx) => ({
+      ...kf,
+      properties: {
+        ...kf.properties,
+        rotation: isExitPreset
+          ? idx === 0
+            ? baseRot
+            : baseRot + clampedRot
+          : idx === 0
+            ? baseRot + clampedRot
+            : baseRot,
+      },
+    }));
+  }
+
+  if (scaleOverride !== undefined && singlePassKfs.length >= 2) {
+    const clampedScalePct = Math.max(
+      0,
+      Math.min(200, Math.round(Number(scaleOverride)))
+    );
+    const scaleMult = Number((clampedScalePct / 100).toFixed(3));
+    const baseSX = device.scaleX || 1;
+    const baseSY = device.scaleY || 1;
+    const scaledSX = Number((baseSX * scaleMult).toFixed(3));
+    const scaledSY = Number((baseSY * scaleMult).toFixed(3));
+    singlePassKfs = singlePassKfs.map((kf, idx) => ({
+      ...kf,
+      properties: {
+        ...kf.properties,
+        scaleX: isExitPreset
+          ? idx === 0
+            ? baseSX
+            : scaledSX
+          : idx === 0
+            ? scaledSX
+            : baseSX,
+        scaleY: isExitPreset
+          ? idx === 0
+            ? baseSY
+            : scaledSY
+          : idx === 0
+            ? scaledSY
+            : baseSY,
+      },
+    }));
+  }
+
+  if (resolvedCustomBezier) {
+    const clampedCb = clampCustomBezierPoints(resolvedCustomBezier);
+    singlePassKfs = singlePassKfs.map((kf) => ({
+      ...kf,
+      customBezier: clampedCb,
+    }));
+  }
+
+  const isLoop = Boolean(
+    options?.loopTransition ??
+      device.activeTransitionLoop ??
+      device.effects.loopTransition
+  );
+  if (!isLoop || singlePassKfs.length < 2) {
+    return singlePassKfs;
+  }
+
+  const end = Math.max(30, durationInFrames - 1);
+  const startF = singlePassKfs[0].frame;
+  const hasHoldAtEnd =
+    singlePassKfs.length >= 3 &&
+    JSON.stringify(singlePassKfs[singlePassKfs.length - 1].properties) ===
+      JSON.stringify(singlePassKfs[singlePassKfs.length - 2].properties);
+  const baseCycle = hasHoldAtEnd ? singlePassKfs.slice(0, -1) : singlePassKfs;
+  const origSpan = Math.max(
+    2,
+    baseCycle[baseCycle.length - 1].frame - startF
+  );
+  const cycleSpan = Math.max(
+    4,
+    Math.min(
+      end - startF,
+      Math.round(options?.transitionDurationFrames ?? origSpan)
+    )
+  );
+
+  const loopedKfs: Keyframe[] = [];
+  let cycleIndex = 0;
+
+  while (startF + cycleIndex * cycleSpan < end) {
+    const cycleStart = startF + cycleIndex * cycleSpan;
+    baseCycle.forEach((kf, kIdx) => {
+      const rel = (kf.frame - startF) / origSpan;
+      let targetFrame = Math.round(cycleStart + rel * cycleSpan);
+      if (cycleIndex > 0 && kIdx === 0) {
+        targetFrame = Math.min(end, cycleStart + 1);
+      }
+      if (targetFrame <= end) {
+        const existingIdx = loopedKfs.findIndex((x) => x.frame === targetFrame);
+        const nextKf: Keyframe = {
+          ...kf,
+          id: `kf-${device.id}-${targetFrame}-c${cycleIndex}`,
+          frame: targetFrame,
+        };
+        if (existingIdx !== -1) {
+          loopedKfs[existingIdx] = nextKf;
+        } else {
+          loopedKfs.push(nextKf);
+        }
+      }
+    });
+    cycleIndex++;
+    if (cycleIndex > 60) break;
+  }
+
+  return loopedKfs.sort((a, b) => a.frame - b.frame);
+}
+
+function buildRawKeyframesForPreset(
+  presetId: AnimationPresetId,
+  device: SceneDeviceObject,
+  durationInFrames: number,
+  options?: TransitionPresetOptions
 ): Keyframe[] {
   const end = Math.max(30, durationInFrames - 1);
+  const startF = Math.max(
+    0,
+    Math.min(end - 6, Math.round(options?.startFrame ?? 0))
+  );
+  const transDur = Math.max(
+    2,
+    Math.min(
+      end - startF,
+      Math.round(
+        options?.transitionDurationFrames ?? Math.min(36, Math.round(end * 0.25))
+      )
+    )
+  );
+  const settleF = Math.min(end, startF + transDur);
   const mid = Math.round(end / 2);
-  const q1 = Math.round(end * 0.25);
-  const q3 = Math.round(end * 0.75);
+  const q1 = Math.max(startF + 2, Math.min(end, startF + transDur));
+  const q3 = Math.max(q1 + 4, Math.round(end * 0.75));
+  const customEase = options?.easing;
 
   const baseProps = {
     x: device.x,
@@ -800,13 +1501,305 @@ export function generateKeyframesForPreset(
     rotation3DZ: device.rotation3DZ,
   };
 
+  const withHold = (kfs: Keyframe[]): Keyframe[] => {
+    const last = kfs[kfs.length - 1];
+    if (last && last.frame < end) {
+      return [
+        ...kfs,
+        {
+          id: `kf-${device.id}-${end}`,
+          frame: end,
+          easing: 'linear',
+          properties: { ...last.properties },
+        },
+      ];
+    }
+    return kfs;
+  };
+
   switch (presetId) {
+    // =========================================================================
+    // SLIDE TRANSITIONS
+    // =========================================================================
+    case 'slide-in':
+    case 'slide-in-right':
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            x: Math.round(device.x + 360),
+            opacity: 0,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+      ]);
+
+    case 'slide-in-left':
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            x: Math.round(device.x - 360),
+            opacity: 0,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+      ]);
+
+    case 'slide-in-up':
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            y: Math.round(device.y + 280),
+            opacity: 0,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+      ]);
+
+    case 'slide-in-down':
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'ease-out',
+          properties: {
+            ...baseProps,
+            y: Math.round(device.y - 280),
+            opacity: 0,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'ease-out',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+      ]);
+
+    case 'device-slide-in':
+      return [
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            x: device.x + 260,
+            y: device.y + 140,
+            opacity: 0.25,
+          },
+        },
+        {
+          id: `kf-${device.id}-${q1}`,
+          frame: q1,
+          easing: customEase ?? 'cubic-bezier',
+          properties: { ...baseProps, opacity: 1 },
+        },
+        {
+          id: `kf-${device.id}-${end}`,
+          frame: end,
+          easing: 'linear',
+          properties: { ...baseProps, opacity: 1 },
+        },
+      ];
+
+    case 'slide-out':
+      return [
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'ease-in',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'ease-in',
+          properties: {
+            ...baseProps,
+            x: Math.round(device.x + 360),
+            opacity: 0,
+          },
+        },
+      ];
+
+    // =========================================================================
+    // FADE TRANSITIONS
+    // =========================================================================
+    case 'fade':
+    case 'fade-in':
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'ease-out',
+          properties: {
+            ...baseProps,
+            opacity: 0,
+            glowIntensity: Number((device.effects.glowIntensity * 0.25).toFixed(2)),
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'ease-out',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+            glowIntensity: device.effects.glowIntensity,
+          },
+        },
+      ]);
+
+    case 'fade-up':
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            y: Math.round(device.y + 75),
+            opacity: 0,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+      ]);
+
+    case 'fade-out':
+      return [
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'ease-in',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'ease-in',
+          properties: {
+            ...baseProps,
+            opacity: 0,
+          },
+        },
+      ];
+
+    case 'fade-in-out':
+      return [
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'ease-out',
+          properties: { ...baseProps, opacity: 0.15 },
+        },
+        {
+          id: `kf-${device.id}-${q1}`,
+          frame: q1,
+          easing: 'linear',
+          properties: { ...baseProps, opacity: 1 },
+        },
+        {
+          id: `kf-${device.id}-${q3}`,
+          frame: q3,
+          easing: 'ease-in',
+          properties: { ...baseProps, opacity: 1 },
+        },
+        {
+          id: `kf-${device.id}-${end}`,
+          frame: end,
+          easing: 'ease-in',
+          properties: { ...baseProps, opacity: 0.15 },
+        },
+      ];
+
+    // =========================================================================
+    // ZOOM TRANSITIONS
+    // =========================================================================
+    case 'zoom':
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            scaleX: Number((device.scaleX * 0.55).toFixed(2)),
+            scaleY: Number((device.scaleY * 0.55).toFixed(2)),
+            opacity: 0.1,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            scaleX: Number(device.scaleX.toFixed(2)),
+            scaleY: Number(device.scaleY.toFixed(2)),
+            opacity: 1,
+          },
+        },
+      ]);
+
     case 'zoom-in':
       return [
         {
-          id: `kf-${device.id}-0`,
-          frame: 0,
-          easing: 'cubic-bezier',
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
           properties: {
             ...baseProps,
             scaleX: Number((device.scaleX * 0.7).toFixed(2)),
@@ -848,29 +1841,99 @@ export function generateKeyframesForPreset(
           },
         },
       ];
+
     case 'zoom-out':
-      return [
+      return withHold([
         {
-          id: `kf-${device.id}-0`,
-          frame: 0,
-          easing: 'cubic-bezier',
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
           properties: {
             ...baseProps,
-            scaleX: Number((device.scaleX * 1.32).toFixed(2)),
-            scaleY: Number((device.scaleY * 1.32).toFixed(2)),
+            scaleX: Number((device.scaleX * 1.4).toFixed(2)),
+            scaleY: Number((device.scaleY * 1.4).toFixed(2)),
+            opacity: 0.25,
           },
         },
         {
-          id: `kf-${device.id}-${end}`,
-          frame: end,
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            scaleX: Number(device.scaleX.toFixed(2)),
+            scaleY: Number(device.scaleY.toFixed(2)),
+            opacity: 1,
+          },
+        },
+      ]);
+
+    case 'zoom-bounce': {
+      const peakF = Math.max(
+        startF + 1,
+        Math.min(settleF - 1, startF + Math.round(transDur * 0.65))
+      );
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'spring',
+          properties: {
+            ...baseProps,
+            scaleX: Number((device.scaleX * 0.48).toFixed(2)),
+            scaleY: Number((device.scaleY * 0.48).toFixed(2)),
+            opacity: 0,
+          },
+        },
+        {
+          id: `kf-${device.id}-${peakF}`,
+          frame: peakF,
+          easing: customEase ?? 'spring',
+          properties: {
+            ...baseProps,
+            scaleX: Number((device.scaleX * 1.12).toFixed(2)),
+            scaleY: Number((device.scaleY * 1.12).toFixed(2)),
+            opacity: 1,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
           easing: 'ease-out',
           properties: {
             ...baseProps,
-            scaleX: Number((device.scaleX * 0.88).toFixed(2)),
-            scaleY: Number((device.scaleY * 0.88).toFixed(2)),
+            scaleX: Number(device.scaleX.toFixed(2)),
+            scaleY: Number(device.scaleY.toFixed(2)),
+            opacity: 1,
+          },
+        },
+      ]);
+    }
+
+    case 'zoom-punch-out':
+      return [
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'ease-in',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+        {
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'ease-in',
+          properties: {
+            ...baseProps,
+            scaleX: Number((device.scaleX * 1.55).toFixed(2)),
+            scaleY: Number((device.scaleY * 1.55).toFixed(2)),
+            opacity: 0,
           },
         },
       ];
+
     case 'smooth-scale':
       return [
         {
@@ -914,59 +1977,61 @@ export function generateKeyframesForPreset(
           },
         },
       ];
-    case 'device-slide-in':
-      return [
+
+    // =========================================================================
+    // 3D & PERSPECTIVE TRANSITIONS
+    // =========================================================================
+    case 'flip-3d':
+      return withHold([
         {
-          id: `kf-${device.id}-0`,
-          frame: 0,
-          easing: 'cubic-bezier',
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
           properties: {
             ...baseProps,
-            x: device.x + 260,
-            y: device.y + 140,
-            opacity: 0.3,
+            scaleX: Number((device.scaleX * 0.78).toFixed(2)),
+            scaleY: Number((device.scaleY * 0.78).toFixed(2)),
+            rotation3DY: device.rotation3DY - 65,
+            rotation3DX: device.rotation3DX + 18,
+            opacity: 0,
           },
         },
         {
-          id: `kf-${device.id}-${q1}`,
-          frame: q1,
-          easing: 'cubic-bezier',
-          properties: { ...baseProps, opacity: 1 },
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
+        },
+      ]);
+
+    case 'tilt-reveal-3d':
+      return withHold([
+        {
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            y: Math.round(device.y + 90),
+            rotation3DX: 38,
+            rotation3DY: -24,
+            opacity: 0.1,
+          },
         },
         {
-          id: `kf-${device.id}-${end}`,
-          frame: end,
-          easing: 'linear',
-          properties: { ...baseProps, opacity: 1 },
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'cubic-bezier',
+          properties: {
+            ...baseProps,
+            opacity: 1,
+          },
         },
-      ];
-    case 'fade-in-out':
-      return [
-        {
-          id: `kf-${device.id}-0`,
-          frame: 0,
-          easing: 'ease-out',
-          properties: { ...baseProps, opacity: 0.2 },
-        },
-        {
-          id: `kf-${device.id}-${q1}`,
-          frame: q1,
-          easing: 'linear',
-          properties: { ...baseProps, opacity: 1 },
-        },
-        {
-          id: `kf-${device.id}-${q3}`,
-          frame: q3,
-          easing: 'ease-in',
-          properties: { ...baseProps, opacity: 1 },
-        },
-        {
-          id: `kf-${device.id}-${end}`,
-          frame: end,
-          easing: 'ease-in',
-          properties: { ...baseProps, opacity: 0.2 },
-        },
-      ];
+      ]);
+
     case 'rotation-reveal':
       return [
         {
@@ -1134,31 +2199,26 @@ export function generateKeyframesForPreset(
       ];
     case 'spring-bounce':
     default:
-      return [
+      return withHold([
         {
-          id: `kf-${device.id}-0`,
-          frame: 0,
-          easing: 'spring',
+          id: `kf-${device.id}-${startF}`,
+          frame: startF,
+          easing: customEase ?? 'spring',
           properties: {
             ...baseProps,
             y: device.y - 120,
             scaleX: Number((device.scaleX * 0.55).toFixed(2)),
             scaleY: Number((device.scaleY * 0.55).toFixed(2)),
+            opacity: 0.1,
           },
         },
         {
-          id: `kf-${device.id}-${mid}`,
-          frame: mid,
-          easing: 'spring',
-          properties: { ...baseProps },
+          id: `kf-${device.id}-${settleF}`,
+          frame: settleF,
+          easing: customEase ?? 'spring',
+          properties: { ...baseProps, opacity: 1 },
         },
-        {
-          id: `kf-${device.id}-${end}`,
-          frame: end,
-          easing: 'ease-out',
-          properties: { ...baseProps },
-        },
-      ];
+      ]);
   }
 }
 
@@ -2035,10 +3095,14 @@ export function computeDrawingPathLength(drawing: SceneDrawingObject): number {
 
   if (
     (drawing.tool === 'brush' ||
+      drawing.tool === 'freehand' ||
       drawing.tool === 'pen' ||
       drawing.tool === 'bezier' ||
       drawing.tool === 'line' ||
-      drawing.tool === 'arrow') &&
+      drawing.tool === 'arrow' ||
+      drawing.tool === 'arrow-pointer' ||
+      drawing.tool === 'highlight' ||
+      drawing.tool === 'underline') &&
     drawing.points &&
     drawing.points.length >= 2
   ) {
@@ -2048,7 +3112,7 @@ export function computeDrawingPathLength(drawing: SceneDrawingObject): number {
       const dy = drawing.points[i].y - drawing.points[i - 1].y;
       total += Math.hypot(dx, dy);
     }
-    if (drawing.tool === 'arrow') {
+    if (drawing.tool === 'arrow' || drawing.tool === 'arrow-pointer') {
       total += Math.max(28, (drawing.strokeWidth || 4) * 6.5);
     }
     return Math.max(24, Math.round(total));
@@ -2064,7 +3128,7 @@ export function computeDrawingPathLength(drawing: SceneDrawingObject): number {
     return Math.max(48, Math.round(perim));
   }
 
-  if (drawing.tool === 'rounded-rect') {
+  if (drawing.tool === 'rounded-rect' || drawing.tool === 'callout') {
     const r = Math.min(w / 2, h / 2, Math.max(0, drawing.cornerRadius || 24));
     const straight = 2 * (w - 2 * r) + 2 * (h - 2 * r);
     const corners = 2 * Math.PI * r;
@@ -2461,8 +3525,188 @@ function sampleClosedSplineContour(
 }
 
 /**
+ * Generates a polygon contour with smoothly filleted (rounded) vertices so shapes like
+ * Hexagon, Octagon, Diamond, and Arch have crisp yet smooth corners.
+ */
+function sampleFilletedPolygon(
+  vertices: { x: number; y: number }[],
+  filletRadius: number,
+  stepsPerCorner = 5
+): { x: number; y: number }[] {
+  const n = vertices.length;
+  if (n < 3 || filletRadius <= 0.5) return vertices;
+  const out: { x: number; y: number }[] = [];
+
+  for (let i = 0; i < n; i++) {
+    const prev = vertices[(i - 1 + n) % n];
+    const curr = vertices[i];
+    const next = vertices[(i + 1) % n];
+
+    const v1x = prev.x - curr.x;
+    const v1y = prev.y - curr.y;
+    const len1 = Math.hypot(v1x, v1y);
+
+    const v2x = next.x - curr.x;
+    const v2y = next.y - curr.y;
+    const len2 = Math.hypot(v2x, v2y);
+
+    if (len1 < 2 || len2 < 2) {
+      out.push(curr);
+      continue;
+    }
+
+    const r = Math.min(filletRadius, len1 * 0.35, len2 * 0.35);
+    const pStart = {
+      x: curr.x + (v1x / len1) * r,
+      y: curr.y + (v1y / len1) * r,
+    };
+    const pEnd = {
+      x: curr.x + (v2x / len2) * r,
+      y: curr.y + (v2y / len2) * r,
+    };
+
+    for (let s = 0; s <= stepsPerCorner; s++) {
+      const t = s / stepsPerCorner;
+      const u = 1 - t;
+      const x = u * u * pStart.x + 2 * u * t * curr.x + t * t * pEnd.x;
+      const y = u * u * pStart.y + 2 * u * t * curr.y + t * t * pEnd.y;
+      out.push({ x: Number(x.toFixed(2)), y: Number(y.toFixed(2)) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Parses an SVG path string (supporting M, L, H, V, Q, C, Z) into normalized local coordinates
+ * scaled to fit `[-rx..rx, -ry..ry]`.
+ */
+function parseCustomSvgPathToContour(
+  svgPath: string | undefined,
+  rx: number,
+  ry: number
+): { x: number; y: number }[] {
+  if (!svgPath || !svgPath.trim()) return [];
+  const tokens = svgPath
+    .replace(/,/g, ' ')
+    .match(/[a-zA-Z]|[-+]?\d*\.?\d+/g);
+  if (!tokens || tokens.length < 4) return [];
+
+  const rawPts: { x: number; y: number }[] = [];
+  let idx = 0;
+  let cmd = 'M';
+  let curX = 0;
+  let curY = 0;
+
+  const readNum = () => {
+    const val = parseFloat(tokens[idx] || '0');
+    idx++;
+    return Number.isNaN(val) ? 0 : val;
+  };
+
+  while (idx < tokens.length) {
+    const tok = tokens[idx];
+    if (/^[a-zA-Z]$/.test(tok)) {
+      cmd = tok;
+      idx++;
+      if (cmd === 'Z' || cmd === 'z') {
+        break;
+      }
+      continue;
+    }
+
+    if (cmd === 'M' || cmd === 'L') {
+      curX = readNum();
+      curY = readNum();
+      rawPts.push({ x: curX, y: curY });
+      if (cmd === 'M') cmd = 'L';
+    } else if (cmd === 'm' || cmd === 'l') {
+      curX += readNum();
+      curY += readNum();
+      rawPts.push({ x: curX, y: curY });
+      if (cmd === 'm') cmd = 'l';
+    } else if (cmd === 'H') {
+      curX = readNum();
+      rawPts.push({ x: curX, y: curY });
+    } else if (cmd === 'h') {
+      curX += readNum();
+      rawPts.push({ x: curX, y: curY });
+    } else if (cmd === 'V') {
+      curY = readNum();
+      rawPts.push({ x: curX, y: curY });
+    } else if (cmd === 'v') {
+      curY += readNum();
+      rawPts.push({ x: curX, y: curY });
+    } else if (cmd === 'Q') {
+      const cx1 = readNum();
+      const cy1 = readNum();
+      const ex = readNum();
+      const ey = readNum();
+      for (let s = 1; s <= 6; s++) {
+        const t = s / 6;
+        const u = 1 - t;
+        rawPts.push({
+          x: u * u * curX + 2 * u * t * cx1 + t * t * ex,
+          y: u * u * curY + 2 * u * t * cy1 + t * t * ey,
+        });
+      }
+      curX = ex;
+      curY = ey;
+    } else if (cmd === 'C') {
+      const cx1 = readNum();
+      const cy1 = readNum();
+      const cx2 = readNum();
+      const cy2 = readNum();
+      const ex = readNum();
+      const ey = readNum();
+      for (let s = 1; s <= 8; s++) {
+        const t = s / 8;
+        const u = 1 - t;
+        rawPts.push({
+          x:
+            u * u * u * curX +
+            3 * u * u * t * cx1 +
+            3 * u * t * t * cx2 +
+            t * t * t * ex,
+          y:
+            u * u * u * curY +
+            3 * u * u * t * cy1 +
+            3 * u * t * t * cy2 +
+            t * t * t * ey,
+        });
+      }
+      curX = ex;
+      curY = ey;
+    } else {
+      idx++;
+    }
+  }
+
+  if (rawPts.length < 3) return [];
+
+  let minX = rawPts[0].x;
+  let maxX = rawPts[0].x;
+  let minY = rawPts[0].y;
+  let maxY = rawPts[0].y;
+  for (const p of rawPts) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  const spanX = Math.max(1e-3, maxX - minX);
+  const spanY = Math.max(1e-3, maxY - minY);
+  const midX = (minX + maxX) / 2;
+  const midY = (minY + maxY) / 2;
+
+  return rawPts.map((p) => ({
+    x: Number((((p.x - midX) / (spanX / 2)) * rx).toFixed(2)),
+    y: Number((((p.y - midY) / (spanY / 2)) * ry).toFixed(2)),
+  }));
+}
+
+/**
  * Computes the true vector contour and perimeter length for any `SceneWebcamOverlay` shape,
- * supporting basic shapes, polygons, organic blobs, asymmetric pebbles, arches, and custom Bezier curves.
+ * supporting basic shapes, polygons, organic blobs, asymmetric pebbles, arches, custom SVG paths, and custom Bezier curves.
  */
 export function computeWebcamShapeGeometry(
   webcam: Pick<
@@ -2474,7 +3718,7 @@ export function computeWebcamShapeGeometry(
     | 'curveIntensity'
     | 'curveTension'
     | 'bezierPoints'
-  >,
+  > & { customSvgPath?: string },
   inset = 0
 ): WebcamShapeGeometryResult {
   const w = Math.max(24, (webcam.width || 320) - inset * 2);
@@ -2487,14 +3731,31 @@ export function computeWebcamShapeGeometry(
   let contourPoints: { x: number; y: number }[] = [];
   let controlAnchors: { x: number; y: number }[] = [];
 
-  if (
-    webcam.shape === 'circle' ||
-    webcam.shape === 'ellipse' ||
-    webcam.shape === 'oval'
-  ) {
-    const radX = webcam.shape === 'circle' ? Math.min(rx, ry) : rx;
-    const radY = webcam.shape === 'circle' ? Math.min(rx, ry) : ry;
-    const steps = 48;
+  if (webcam.shape === 'circle') {
+    const rad = Math.min(rx, ry);
+    const steps = 56;
+    for (let i = 0; i < steps; i++) {
+      const a = (i / steps) * Math.PI * 2;
+      contourPoints.push({
+        x: Number((Math.cos(a) * rad).toFixed(2)),
+        y: Number((Math.sin(a) * rad).toFixed(2)),
+      });
+    }
+  } else if (webcam.shape === 'ellipse' || webcam.shape === 'oval') {
+    const isNearlySquare = Math.abs(rx - ry) < Math.min(rx, ry) * 0.08;
+    const radX =
+      webcam.shape === 'oval'
+        ? isNearlySquare
+          ? rx * 0.78
+          : rx
+        : rx;
+    const radY =
+      webcam.shape === 'ellipse'
+        ? isNearlySquare
+          ? ry * 0.74
+          : ry
+        : ry;
+    const steps = 56;
     for (let i = 0; i < steps; i++) {
       const a = (i / steps) * Math.PI * 2;
       contourPoints.push({
@@ -2504,8 +3765,17 @@ export function computeWebcamShapeGeometry(
     }
   } else if (webcam.shape === 'organic-blob') {
     const anchorsCount = 8;
-    const wave = 0.08 + intensity * 0.2;
-    const offsets = [1.0, 0.88 - wave * 0.4, 1.04 + wave * 0.5, 0.85, 0.98 + wave * 0.35, 0.86 - wave * 0.3, 1.02 + wave * 0.4, 0.9];
+    const wave = 0.08 + intensity * 0.22;
+    const offsets = [
+      1.0,
+      0.86 - wave * 0.4,
+      1.04 + wave * 0.45,
+      0.84,
+      0.98 + wave * 0.35,
+      0.85 - wave * 0.3,
+      1.02 + wave * 0.4,
+      0.89,
+    ];
     for (let i = 0; i < anchorsCount; i++) {
       const angle = (i / anchorsCount) * Math.PI * 2 - Math.PI / 2;
       const rMul = offsets[i % offsets.length];
@@ -2514,15 +3784,15 @@ export function computeWebcamShapeGeometry(
         y: Number((Math.sin(angle) * ry * rMul).toFixed(2)),
       });
     }
-    contourPoints = sampleClosedSplineContour(controlAnchors, tension, 12);
+    contourPoints = sampleClosedSplineContour(controlAnchors, tension, 14);
   } else if (webcam.shape === 'curved-asymmetric') {
-    const asym = 0.1 + intensity * 0.22;
+    const asym = 0.12 + intensity * 0.24;
     controlAnchors = [
       { x: -rx * (0.15 - asym * 0.2), y: -ry * 0.94 },
-      { x: rx * (0.85 + asym * 0.35), y: -ry * (0.48 - asym * 0.2) },
-      { x: rx * 0.92, y: ry * (0.55 + asym * 0.25) },
+      { x: rx * (0.85 + asym * 0.32), y: -ry * (0.48 - asym * 0.2) },
+      { x: rx * 0.92, y: ry * (0.55 + asym * 0.22) },
       { x: rx * 0.08, y: ry * 0.95 },
-      { x: -rx * (0.88 + asym * 0.2), y: ry * (0.42 - asym * 0.15) },
+      { x: -rx * (0.88 + asym * 0.18), y: ry * (0.42 - asym * 0.15) },
       { x: -rx * 0.82, y: -ry * (0.52 + asym * 0.2) },
     ];
     contourPoints = sampleClosedSplineContour(controlAnchors, tension, 14);
@@ -2544,30 +3814,47 @@ export function computeWebcamShapeGeometry(
     }));
     contourPoints = sampleClosedSplineContour(controlAnchors, tension, 14);
   } else if (webcam.shape === 'arch') {
-    // Editorial arch: semicircle dome on top, vertical sides, gently rounded base
-    const archSteps = 28;
+    const archSteps = 32;
+    const rawArch: { x: number; y: number }[] = [];
     for (let i = 0; i <= archSteps; i++) {
       const a = Math.PI + (i / archSteps) * Math.PI;
-      contourPoints.push({
+      rawArch.push({
         x: Number((Math.cos(a) * rx).toFixed(2)),
-        y: Number((-ry * 0.15 + Math.sin(a) * (ry * 0.85)).toFixed(2)),
+        y: Number((-ry * 0.12 + Math.sin(a) * (ry * 0.88)).toFixed(2)),
       });
     }
-    contourPoints.push({ x: rx, y: ry * 0.92 });
-    contourPoints.push({ x: rx * 0.88, y: ry });
-    contourPoints.push({ x: -rx * 0.88, y: ry });
-    contourPoints.push({ x: -rx, y: ry * 0.92 });
+    const bottomCornerR = Math.min(rx * 0.22, Math.max(8, webcam.cornerRadius || 20));
+    const rightCorner = { cx: rx - bottomCornerR, cy: ry - bottomCornerR };
+    const leftCorner = { cx: -rx + bottomCornerR, cy: ry - bottomCornerR };
+    for (let s = 0; s <= 6; s++) {
+      const a = (s / 6) * (Math.PI / 2);
+      rawArch.push({
+        x: Number((rightCorner.cx + Math.cos(a) * bottomCornerR).toFixed(2)),
+        y: Number((rightCorner.cy + Math.sin(a) * bottomCornerR).toFixed(2)),
+      });
+    }
+    for (let s = 0; s <= 6; s++) {
+      const a = Math.PI / 2 + (s / 6) * (Math.PI / 2);
+      rawArch.push({
+        x: Number((leftCorner.cx + Math.cos(a) * bottomCornerR).toFixed(2)),
+        y: Number((leftCorner.cy + Math.sin(a) * bottomCornerR).toFixed(2)),
+      });
+    }
+    contourPoints = rawArch;
   } else if (webcam.shape === 'rounded-hexagon') {
+    const rawHex: { x: number; y: number }[] = [];
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2 - Math.PI / 2;
-      contourPoints.push({
+      rawHex.push({
         x: Number((Math.cos(a) * rx).toFixed(2)),
         y: Number((Math.sin(a) * ry).toFixed(2)),
       });
     }
+    const fillet = Math.min(w, h) * (0.04 + intensity * 0.08);
+    contourPoints = sampleFilletedPolygon(rawHex, fillet, 5);
   } else if (webcam.shape === 'octagon') {
     const cut = 0.29;
-    contourPoints = [
+    const rawOct = [
       { x: -rx * (1 - cut), y: -ry },
       { x: rx * (1 - cut), y: -ry },
       { x: rx, y: -ry * (1 - cut) },
@@ -2577,65 +3864,111 @@ export function computeWebcamShapeGeometry(
       { x: -rx, y: ry * (1 - cut) },
       { x: -rx, y: -ry * (1 - cut) },
     ];
+    const fillet = Math.min(w, h) * (0.03 + intensity * 0.05);
+    contourPoints = sampleFilletedPolygon(rawOct, fillet, 4);
   } else if (webcam.shape === 'diamond') {
-    contourPoints = [
+    const rawDiamond = [
       { x: 0, y: -ry },
       { x: rx, y: 0 },
       { x: 0, y: ry },
       { x: -rx, y: 0 },
     ];
+    const fillet = Math.min(w, h) * (0.04 + intensity * 0.08);
+    contourPoints = sampleFilletedPolygon(rawDiamond, fillet, 5);
   } else if (webcam.shape === 'slanted-rect') {
-    const slant = Math.min(rx * 0.36, Math.max(12, rx * (0.12 + intensity * 0.24)));
-    contourPoints = [
+    const slant = Math.min(rx * 0.36, Math.max(12, rx * (0.14 + intensity * 0.22)));
+    const rawSlant = [
       { x: -rx + slant, y: -ry },
       { x: rx, y: -ry },
       { x: rx - slant, y: ry },
       { x: -rx, y: ry },
     ];
+    contourPoints = sampleFilletedPolygon(rawSlant, Math.min(18, webcam.cornerRadius || 12), 4);
   } else if (webcam.shape === 'cut-corner') {
-    const chamfer = Math.min(w, h) * (0.12 + intensity * 0.1);
+    const chamfer = Math.min(w, h) * (0.14 + intensity * 0.1);
     contourPoints = [
       { x: -rx + chamfer, y: -ry },
-      { x: rx - chamfer * 0.4, y: -ry },
-      { x: rx, y: -ry + chamfer * 0.4 },
+      { x: rx - chamfer * 0.35, y: -ry },
+      { x: rx, y: -ry + chamfer * 0.35 },
       { x: rx, y: ry - chamfer },
       { x: rx - chamfer, y: ry },
-      { x: -rx + chamfer * 0.4, y: ry },
-      { x: -rx, y: ry - chamfer * 0.4 },
+      { x: -rx + chamfer * 0.35, y: ry },
+      { x: -rx, y: ry - chamfer * 0.35 },
       { x: -rx, y: -ry + chamfer },
     ];
   } else if (webcam.shape === 'speech-bubble') {
-    const bodyBottom = ry * 0.74;
-    contourPoints = [
+    const bodyBottom = ry * 0.72;
+    const rawBubble = [
       { x: -rx, y: -ry },
       { x: rx, y: -ry },
       { x: rx, y: bodyBottom },
-      { x: -rx * 0.1, y: bodyBottom },
-      { x: -rx * 0.48, y: ry },
+      { x: -rx * 0.08, y: bodyBottom },
+      { x: -rx * 0.46, y: ry },
       { x: -rx * 0.38, y: bodyBottom },
       { x: -rx, y: bodyBottom },
     ];
+    contourPoints = sampleFilletedPolygon(rawBubble, 14, 4);
   } else if (webcam.shape === 'custom-svg') {
-    // Shield / Crest silhouette
-    contourPoints = [
-      { x: 0, y: -ry },
-      { x: rx * 0.94, y: -ry * 0.72 },
-      { x: rx * 0.88, y: ry * 0.18 },
-      { x: rx * 0.48, y: ry * 0.68 },
-      { x: 0, y: ry },
-      { x: -rx * 0.48, y: ry * 0.68 },
-      { x: -rx * 0.88, y: ry * 0.18 },
-      { x: -rx * 0.94, y: -ry * 0.72 },
+    const parsed = parseCustomSvgPathToContour(webcam.customSvgPath, rx, ry);
+    if (parsed.length >= 3) {
+      contourPoints = parsed;
+    } else {
+      const rawShield = [
+        { x: 0, y: -ry },
+        { x: rx * 0.94, y: -ry * 0.72 },
+        { x: rx * 0.88, y: ry * 0.18 },
+        { x: rx * 0.48, y: ry * 0.68 },
+        { x: 0, y: ry },
+        { x: -rx * 0.48, y: ry * 0.68 },
+        { x: -rx * 0.88, y: ry * 0.18 },
+        { x: -rx * 0.94, y: -ry * 0.72 },
+      ];
+      contourPoints = sampleFilletedPolygon(rawShield, 12, 4);
+    }
+  } else if (webcam.shape === 'capsule') {
+    const isNearlySquare = Math.abs(rx - ry) < Math.min(rx, ry) * 0.12;
+    const halfW = rx;
+    const halfH = isNearlySquare ? ry * 0.66 : ry;
+    const r = Math.min(halfW, halfH);
+    const cornerSteps = 12;
+    const corners = [
+      { cx: halfW - r, cy: -halfH + r, startA: -Math.PI / 2 },
+      { cx: halfW - r, cy: halfH - r, startA: 0 },
+      { cx: -halfW + r, cy: halfH - r, startA: Math.PI / 2 },
+      { cx: -halfW + r, cy: -halfH + r, startA: Math.PI },
     ];
+    for (const c of corners) {
+      for (let s = 0; s <= cornerSteps; s++) {
+        const a = c.startA + (s / cornerSteps) * (Math.PI / 2);
+        contourPoints.push({
+          x: Number((c.cx + Math.cos(a) * r).toFixed(2)),
+          y: Number((c.cy + Math.sin(a) * r).toFixed(2)),
+        });
+      }
+    }
   } else {
-    // Rectangular family: rounded-rect, square, vertical-rect, horizontal-rect, capsule
-    const halfW = webcam.shape === 'square' ? Math.min(rx, ry) : rx;
-    const halfH = webcam.shape === 'square' ? Math.min(rx, ry) : ry;
+    // Rectangular family: rounded-rect, square, vertical-rect, horizontal-rect
+    let halfW = rx;
+    let halfH = ry;
+    if (webcam.shape === 'square') {
+      const side = Math.min(rx, ry);
+      halfW = side;
+      halfH = side;
+    } else if (webcam.shape === 'vertical-rect' && rx >= ry * 0.95) {
+      halfW = rx * 0.72;
+    } else if (webcam.shape === 'horizontal-rect' && ry >= rx * 0.95) {
+      halfH = ry * 0.68;
+    }
+
+    const maxAllowedR =
+      webcam.shape === 'square'
+        ? Math.min(halfW, halfH) * 0.22
+        : Math.min(halfW, halfH) * 0.48;
     const rawR =
-      webcam.shape === 'capsule'
-        ? Math.min(halfW, halfH)
-        : Math.max(0, webcam.cornerRadius ?? 36);
-    const r = Math.min(halfW, halfH, rawR);
+      webcam.shape === 'square'
+        ? Math.min(24, Math.max(0, webcam.cornerRadius ?? 16))
+        : Math.max(8, webcam.cornerRadius ?? 36);
+    const r = Math.min(maxAllowedR, rawR);
     const cornerSteps = 8;
     const corners = [
       { cx: halfW - r, cy: -halfH + r, startA: -Math.PI / 2 },
@@ -2682,7 +4015,7 @@ export function computeWebcamPerimeterLength(
     | 'curveIntensity'
     | 'curveTension'
     | 'bezierPoints'
-  >
+  > & { customSvgPath?: string }
 ): number {
   return computeWebcamShapeGeometry(webcam, 0).perimeterLength;
 }
@@ -2783,7 +4116,7 @@ export function resolveWebcamAtFrame(
     }
   }
 
-  if (!keyframes || keyframes.length === 0) {
+  if (!keyframes || keyframes.length < 2) {
     return {
       ...webcam,
       y: webcam.y + entranceOffsetY,
@@ -2797,31 +4130,64 @@ export function resolveWebcamAtFrame(
   }
 
   const interpolated = interpolateTrackAtFrame(keyframes, frame);
-  const x = interpolated.x ?? webcam.x;
-  const y = interpolated.y ?? webcam.y;
-  const width = interpolated.width ?? webcam.width;
-  const height = interpolated.height ?? webcam.height;
-  const scaleX = interpolated.scaleX ?? webcam.scaleX;
-  const scaleY = interpolated.scaleY ?? webcam.scaleY;
-  const rotation = interpolated.rotation ?? webcam.rotation;
-  const opacity = interpolated.opacity ?? webcam.opacity;
-  const cornerRadius = interpolated.cornerRadius ?? webcam.cornerRadius;
-  const borderWidth = interpolated.strokeWidth ?? webcam.borderWidth;
-  const borderColor = interpolated.strokeColor ?? webcam.borderColor;
-  const borderOpacity = interpolated.borderOpacity ?? webcam.borderOpacity;
-  const glowRadius = interpolated.glowBlur ?? webcam.glowRadius;
-  const glowIntensity = interpolated.glowIntensity ?? webcam.glowIntensity;
-  const glowColor = interpolated.glowColor ?? webcam.glowColor;
-  const zoom = interpolated.cropZoom ?? webcam.zoom;
-  const panX = interpolated.panX ?? webcam.panX;
-  const panY = interpolated.panY ?? webcam.panY;
-  const borderAnimationProgress =
-    interpolated.borderProgress ?? webcam.borderAnimationProgress ?? 1;
-  const curveIntensity = interpolated.curveIntensity ?? webcam.curveIntensity;
+  const x = isPropertyAnimated(keyframes, 'x') ? (interpolated.x ?? webcam.x) : webcam.x;
+  const y = isPropertyAnimated(keyframes, 'y') ? (interpolated.y ?? webcam.y) : webcam.y;
+  const width = isPropertyAnimated(keyframes, 'width')
+    ? (interpolated.width ?? webcam.width)
+    : webcam.width;
+  const height = isPropertyAnimated(keyframes, 'height')
+    ? (interpolated.height ?? webcam.height)
+    : webcam.height;
+  const scaleX = isPropertyAnimated(keyframes, 'scaleX')
+    ? (interpolated.scaleX ?? webcam.scaleX)
+    : webcam.scaleX;
+  const scaleY = isPropertyAnimated(keyframes, 'scaleY')
+    ? (interpolated.scaleY ?? webcam.scaleY)
+    : webcam.scaleY;
+  const rotation = isPropertyAnimated(keyframes, 'rotation')
+    ? (interpolated.rotation ?? webcam.rotation)
+    : webcam.rotation;
+  const opacity = isPropertyAnimated(keyframes, 'opacity')
+    ? (interpolated.opacity ?? webcam.opacity)
+    : webcam.opacity;
+  const cornerRadius = isPropertyAnimated(keyframes, 'cornerRadius')
+    ? (interpolated.cornerRadius ?? webcam.cornerRadius)
+    : webcam.cornerRadius;
+  const borderWidth = isPropertyAnimated(keyframes, 'strokeWidth')
+    ? (interpolated.strokeWidth ?? webcam.borderWidth)
+    : webcam.borderWidth;
+  const borderColor = isPropertyAnimated(keyframes, 'strokeColor')
+    ? (interpolated.strokeColor ?? webcam.borderColor)
+    : webcam.borderColor;
+  const borderOpacity = isPropertyAnimated(keyframes, 'borderOpacity')
+    ? (interpolated.borderOpacity ?? webcam.borderOpacity)
+    : webcam.borderOpacity;
+  const glowRadius = isPropertyAnimated(keyframes, 'glowBlur')
+    ? (interpolated.glowBlur ?? webcam.glowRadius)
+    : webcam.glowRadius;
+  const glowIntensity = isPropertyAnimated(keyframes, 'glowIntensity')
+    ? (interpolated.glowIntensity ?? webcam.glowIntensity)
+    : webcam.glowIntensity;
+  const glowColor = isPropertyAnimated(keyframes, 'glowColor')
+    ? (interpolated.glowColor ?? webcam.glowColor)
+    : webcam.glowColor;
+  const zoom = isPropertyAnimated(keyframes, 'cropZoom')
+    ? (interpolated.cropZoom ?? webcam.zoom)
+    : webcam.zoom;
+  const panX = isPropertyAnimated(keyframes, 'panX')
+    ? (interpolated.panX ?? webcam.panX)
+    : webcam.panX;
+  const panY = isPropertyAnimated(keyframes, 'panY')
+    ? (interpolated.panY ?? webcam.panY)
+    : webcam.panY;
+  const borderAnimationProgress = isPropertyAnimated(keyframes, 'borderProgress')
+    ? (interpolated.borderProgress ?? webcam.borderAnimationProgress ?? 1)
+    : (webcam.borderAnimationProgress ?? 1);
+  const curveIntensity = isPropertyAnimated(keyframes, 'curveIntensity')
+    ? (interpolated.curveIntensity ?? webcam.curveIntensity)
+    : webcam.curveIntensity;
 
-  const hasGlowKeyframes = keyframes.some(
-    (kf) => kf.properties.glowIntensity !== undefined
-  );
+  const hasGlowKeyframes = isPropertyAnimated(keyframes, 'glowIntensity');
 
   return {
     ...webcam,

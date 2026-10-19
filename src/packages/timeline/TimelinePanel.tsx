@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Camera,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -68,10 +69,12 @@ export const TimelinePanel: React.FC = () => {
     lastTimelineNotice,
     devices,
     drawings,
+    webcams,
     clips,
     tracks,
     selectedIds,
     selectedDrawingId,
+    selectedWebcamId,
     selectedClipId,
     selectedKeyframe,
     copiedKeyframe,
@@ -96,6 +99,10 @@ export const TimelinePanel: React.FC = () => {
     updateDrawing,
     duplicateDrawing,
     deleteDrawing,
+    selectWebcam,
+    updateWebcam,
+    duplicateWebcam,
+    deleteWebcam,
     selectClip,
     updateClip,
     updateClipsBatch,
@@ -884,12 +891,12 @@ export const TimelinePanel: React.FC = () => {
   return (
     <section
       aria-label="Animation & Video Sequence Timeline"
-      className={`bg-[#0B0F19] border-t border-slate-700/80 flex flex-col select-none shrink-0 transition-all ${
+      className={`bg-white border-t border-slate-200 flex flex-col select-none shrink-0 transition-all ${
         timelineCollapsed ? 'h-10' : 'h-72'
       }`}
     >
-      {/* High-Contrast CapCut-Style Timeline Transport & Editing Bar */}
-      <div className="h-10 px-2 bg-[#111827] border-b border-slate-700/80 flex items-center justify-between gap-1 shrink-0 overflow-x-auto">
+      {/* White-Themed Timeline Transport & Editing Bar */}
+      <div className="h-10 px-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-1.5 shrink-0 overflow-x-auto">
         {/* Left: Playback Transport & SMPTE HH:MM:SS:FF Timecode */}
         <div className="flex items-center gap-0.5 shrink-0">
           <button
@@ -904,7 +911,7 @@ export const TimelinePanel: React.FC = () => {
             }}
             aria-label="Jump to start frame"
             title="Jump to Start Frame 0 (Home)"
-            className="p-1 text-slate-300 hover:text-white rounded hover:bg-slate-800"
+            className="p-1 text-slate-600 hover:text-slate-900 rounded hover:bg-slate-200/70 transition-colors"
           >
             <SkipBack className="w-3.5 h-3.5" />
           </button>
@@ -914,7 +921,7 @@ export const TimelinePanel: React.FC = () => {
             onClick={() => stepFrame(-1)}
             aria-label="Step back one frame"
             title="Previous Frame (Left Arrow)"
-            className="p-1 text-slate-300 hover:text-white rounded hover:bg-slate-800"
+            className="p-1 text-slate-600 hover:text-slate-900 rounded hover:bg-slate-200/70 transition-colors"
           >
             <ChevronLeft className="w-3.5 h-3.5" />
           </button>
@@ -923,20 +930,20 @@ export const TimelinePanel: React.FC = () => {
             type="button"
             onClick={() => setIsPlaying(!isPlaying)}
             aria-label={isPlaying ? 'Pause playback' : 'Start playback'}
-            className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors shadow-sm ${
+            className={`px-2.5 py-1 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors shadow-xs ${
               isPlaying
-                ? 'bg-amber-400 text-slate-950'
-                : 'bg-cyan-400 hover:bg-cyan-300 text-slate-950'
+                ? 'bg-amber-500 text-white'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
             }`}
           >
             {isPlaying ? (
               <>
-                <Pause className="w-3.5 h-3.5 fill-slate-950" />
+                <Pause className="w-3.5 h-3.5 fill-white" />
                 <span>Pause</span>
               </>
             ) : (
               <>
-                <Play className="w-3.5 h-3.5 fill-slate-950" />
+                <Play className="w-3.5 h-3.5 fill-white" />
                 <span>Play</span>
               </>
             )}
@@ -947,7 +954,7 @@ export const TimelinePanel: React.FC = () => {
             onClick={() => stepFrame(1)}
             aria-label="Step forward one frame"
             title="Next Frame (Right Arrow)"
-            className="p-1 text-slate-300 hover:text-white rounded hover:bg-slate-800"
+            className="p-1 text-slate-600 hover:text-slate-900 rounded hover:bg-slate-200/70 transition-colors"
           >
             <SkipForward className="w-3.5 h-3.5" />
           </button>
@@ -959,8 +966,8 @@ export const TimelinePanel: React.FC = () => {
             title="Loop Playback"
             className={`p-1 rounded transition-colors ${
               loopPlayback
-                ? 'text-cyan-300 bg-cyan-500/20 border border-cyan-500/40'
-                : 'text-slate-400 hover:text-slate-200'
+                ? 'text-blue-600 bg-blue-50 border border-blue-200'
+                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/60'
             }`}
           >
             <Repeat className="w-3.5 h-3.5" />
@@ -970,33 +977,33 @@ export const TimelinePanel: React.FC = () => {
           <div
             data-testid="timeline-timecode-display"
             title={`Current Timecode: ${currentTimecode} (${currentSeconds}s) | Total: ${totalTimecode} (${totalSeconds}s) at ${fps} FPS`}
-            className="font-mono text-[11px] tabular-nums bg-[#070A10] border border-slate-700 rounded px-1.5 py-0.5 text-slate-100 ml-0.5 flex items-center gap-1"
+            className="font-mono text-[11px] tabular-nums bg-white border border-slate-200 rounded-md px-2 py-0.5 text-slate-800 ml-1 flex items-center gap-1 shadow-2xs"
           >
-            <span className="text-cyan-400 font-bold tracking-tight">
+            <span className="text-blue-600 font-bold tracking-tight">
               {currentTimecode}
             </span>
-            <span className="text-slate-600">/</span>
-            <span className="text-slate-400">{totalTimecode}</span>
-            <span className="text-slate-700">|</span>
-            <span className="text-rose-400 font-bold">
+            <span className="text-slate-300">/</span>
+            <span className="text-slate-500">{totalTimecode}</span>
+            <span className="text-slate-300">|</span>
+            <span className="text-rose-600 font-bold">
               F{String(currentFrame).padStart(3, '0')}
             </span>
-            <span className="text-slate-500 text-[10px]">
+            <span className="text-slate-400 text-[10px]">
               /{durationInFrames}f
             </span>
           </div>
         </div>
 
-        {/* Center: CapCut Video Split / Trim / Ripple Tools + Multi-Keyframe Controls */}
-        <div className="flex items-center gap-1 shrink-0">
+        {/* Center: Video Split / Trim / Ripple Tools + Multi-Keyframe Controls */}
+        <div className="flex items-center gap-1.5 shrink-0">
           {/* Video & Drawing Clip Trim, Split & Ripple Group */}
-          <div className="flex items-center gap-0.5 bg-[#070A10] border border-slate-700/80 rounded-md px-1 py-0.5">
+          <div className="flex items-center gap-0.5 bg-white border border-slate-200 rounded-md px-1 py-0.5 shadow-2xs">
             <button
               type="button"
               disabled={!canEditClipOrDrawing}
               onClick={() => trimSelectedClipToPlayhead('left')}
               title="Trim Selected Clip Start (In-Point) to Playhead"
-              className="px-1.5 py-0.5 rounded hover:bg-emerald-500/20 disabled:opacity-40 text-emerald-300 text-[11px] font-mono font-semibold transition-colors"
+              className="px-1.5 py-0.5 rounded hover:bg-slate-100 disabled:opacity-40 text-slate-700 text-[11px] font-mono font-semibold transition-colors"
             >
               [ In
             </button>
@@ -1007,7 +1014,7 @@ export const TimelinePanel: React.FC = () => {
               onClick={splitSelectedClipAtPlayhead}
               aria-label="Split Clip"
               title={`Split selected clip at playhead (S) — ${splitStatus.reason}`}
-              className="px-2 py-0.5 rounded bg-emerald-500/25 hover:bg-emerald-400 hover:text-slate-950 disabled:opacity-40 text-emerald-200 border border-emerald-400/60 text-[11px] font-semibold flex items-center gap-1 transition-colors"
+              className="px-2 py-0.5 rounded bg-blue-50 hover:bg-blue-600 hover:text-white disabled:opacity-40 text-blue-700 border border-blue-200 text-[11px] font-semibold flex items-center gap-1 transition-colors"
             >
               <Scissors className="w-3 h-3" />
               <span>Split</span>
@@ -1017,7 +1024,7 @@ export const TimelinePanel: React.FC = () => {
               disabled={!canEditClipOrDrawing}
               onClick={() => trimSelectedClipToPlayhead('right')}
               title="Trim Selected Clip End (Out-Point) to Playhead"
-              className="px-1.5 py-0.5 rounded hover:bg-emerald-500/20 disabled:opacity-40 text-emerald-300 text-[11px] font-mono font-semibold transition-colors"
+              className="px-1.5 py-0.5 rounded hover:bg-slate-100 disabled:opacity-40 text-slate-700 text-[11px] font-mono font-semibold transition-colors"
             >
               Out ]
             </button>
@@ -1029,8 +1036,8 @@ export const TimelinePanel: React.FC = () => {
               title="Ripple Trim Mode: Trimming a clip shifts subsequent clips on the same track"
               className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold border transition-colors ${
                 rippleTrimMode
-                  ? 'bg-amber-500/25 border-amber-400 text-amber-200'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+                  ? 'bg-amber-50 border-amber-300 text-amber-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100'
               }`}
             >
               Ripple
@@ -1041,21 +1048,21 @@ export const TimelinePanel: React.FC = () => {
               onClick={duplicateSelectedClip}
               title="Duplicate Selected Clip or Drawing"
               aria-label="Duplicate Selected Clip"
-              className="p-1 rounded hover:bg-slate-800 disabled:opacity-40 text-slate-300"
+              className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 text-slate-600"
             >
               <Copy className="w-3 h-3" />
             </button>
           </div>
 
           {/* Keyframe Navigation & Creation Group */}
-          <div className="flex items-center gap-0.5 bg-[#070A10] border border-slate-700/80 rounded-md px-1 py-0.5">
+          <div className="flex items-center gap-0.5 bg-white border border-slate-200 rounded-md px-1 py-0.5 shadow-2xs">
             <button
               type="button"
               disabled={!activeTargetId}
               onClick={() => jumpToAdjacentKeyframe('prev')}
               title="Jump to Previous Keyframe"
               aria-label="Jump to Previous Keyframe"
-              className="p-1 rounded hover:bg-slate-800 disabled:opacity-40 text-cyan-300"
+              className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 text-slate-600"
             >
               <ChevronLeft className="w-3.5 h-3.5" />
             </button>
@@ -1069,7 +1076,7 @@ export const TimelinePanel: React.FC = () => {
                   addKeyframeAtCurrentFrame(activeTargetId, selectedEasing);
                 }
               }}
-              className="px-2 py-0.5 rounded bg-cyan-500/20 hover:bg-cyan-400 hover:text-slate-950 disabled:opacity-40 text-cyan-200 border border-cyan-400/50 text-[11px] font-semibold flex items-center gap-1 transition-colors"
+              className="px-2 py-0.5 rounded bg-blue-50 hover:bg-blue-600 hover:text-white disabled:opacity-40 text-blue-700 border border-blue-200 text-[11px] font-semibold flex items-center gap-1 transition-colors"
             >
               <Plus className="w-3 h-3" />
               <span>Keyframe</span>
@@ -1081,7 +1088,7 @@ export const TimelinePanel: React.FC = () => {
               onClick={() => jumpToAdjacentKeyframe('next')}
               title="Jump to Next Keyframe"
               aria-label="Jump to Next Keyframe"
-              className="p-1 rounded hover:bg-slate-800 disabled:opacity-40 text-cyan-300"
+              className="p-1 rounded hover:bg-slate-100 disabled:opacity-40 text-slate-600"
             >
               <ChevronRight className="w-3.5 h-3.5" />
             </button>
@@ -1100,10 +1107,11 @@ export const TimelinePanel: React.FC = () => {
                   );
                 }
               }}
-              className="bg-[#111827] border border-slate-700 rounded px-1 py-0.5 text-[11px] text-slate-200"
+              className="bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5 text-[11px] text-slate-700"
             >
               <option value="ease-in-out">Ease In-Out</option>
               <option value="cubic-bezier">Cubic Bezier</option>
+              <option value="custom-path">Custom Path</option>
               <option value="ease-out">Ease Out</option>
               <option value="ease-in">Ease In</option>
               <option value="spring">Spring Physics</option>
@@ -1123,7 +1131,7 @@ export const TimelinePanel: React.FC = () => {
                 }
                 title="Copy Selected Keyframe"
                 aria-label="Copy selected keyframe"
-                className="p-1 text-slate-200 hover:text-cyan-300 rounded bg-[#070A10] border border-slate-700"
+                className="p-1 text-slate-600 hover:text-blue-600 rounded bg-white border border-slate-200"
               >
                 <Copy className="w-3 h-3" />
               </button>
@@ -1137,7 +1145,7 @@ export const TimelinePanel: React.FC = () => {
                 }
                 aria-label="Delete selected keyframe"
                 title="Delete Selected Keyframe"
-                className="p-1 text-rose-300 hover:text-white rounded bg-rose-500/20 border border-rose-500/40"
+                className="p-1 text-rose-600 hover:bg-rose-50 rounded bg-white border border-rose-200"
               >
                 <Trash2 className="w-3 h-3" />
               </button>
@@ -1152,7 +1160,7 @@ export const TimelinePanel: React.FC = () => {
                 if (tr) pasteKeyframeAtPlayhead(tr.id);
               }}
               title="Paste Keyframe at Playhead"
-              className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-200 border border-purple-400/50 text-[11px] font-medium flex items-center gap-1"
+              className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 text-[11px] font-medium flex items-center gap-1"
             >
               <Clipboard className="w-3 h-3" />
               <span>Paste KF</span>
@@ -1167,7 +1175,7 @@ export const TimelinePanel: React.FC = () => {
               onChange={(e) =>
                 setQuickPreset(e.target.value as AnimationPresetId)
               }
-              className="bg-[#070A10] border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200"
+              className="bg-white border border-slate-200 rounded px-2 py-1 text-[11px] text-slate-700"
             >
               {ANIMATION_PRESETS.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -1183,9 +1191,9 @@ export const TimelinePanel: React.FC = () => {
                   applyAnimationPresetToDevice(activeDeviceId, quickPreset);
                 }
               }}
-              className="px-2 py-1 rounded bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/50 text-purple-200 text-[11px] font-semibold flex items-center gap-1"
+              className="px-2 py-1 rounded bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 text-[11px] font-semibold flex items-center gap-1"
             >
-              <Wand2 className="w-3 h-3" />
+              <Wand2 className="w-3 h-3 text-blue-600" />
               <span>Preset</span>
             </button>
           </div>
@@ -1196,7 +1204,7 @@ export const TimelinePanel: React.FC = () => {
           {lastTimelineNotice && (
             <span
               data-testid="timeline-status-notice"
-              className="hidden 2xl:inline-block text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-300 truncate max-w-[180px]"
+              className="hidden 2xl:inline-block text-[10px] font-mono px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700 truncate max-w-[180px]"
             >
               {lastTimelineNotice}
             </span>
@@ -1211,8 +1219,8 @@ export const TimelinePanel: React.FC = () => {
             title="Onion Skin / Motion Trail: Display device path and ghost silhouettes across previous and next keyframes"
             className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border flex items-center gap-1 transition-colors ${
               showMotionTrail
-                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-sm'
-                : 'bg-[#070A10] border-slate-700 text-slate-400 hover:text-slate-200'
+                ? 'bg-blue-50 border-blue-300 text-blue-700'
+                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
             }`}
           >
             <Spline className="w-3 h-3" />
@@ -1225,8 +1233,8 @@ export const TimelinePanel: React.FC = () => {
             aria-pressed={autoKeyframe}
             className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border flex items-center gap-1 transition-colors ${
               autoKeyframe
-                ? 'bg-rose-500/20 border-rose-400 text-rose-200'
-                : 'bg-[#070A10] border-slate-700 text-slate-400 hover:text-slate-200'
+                ? 'bg-rose-50 border-rose-300 text-rose-700'
+                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
             }`}
           >
             <Diamond className="w-2.5 h-2.5" />
@@ -1237,7 +1245,7 @@ export const TimelinePanel: React.FC = () => {
             aria-label="Sequence Duration"
             value={durationInFrames}
             onChange={(e) => setTimelineSettings(fps, Number(e.target.value))}
-            className="bg-[#070A10] border border-slate-700 rounded px-1 py-0.5 text-[10px] font-mono tabular-nums text-slate-200"
+            className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-[10px] font-mono tabular-nums text-slate-700"
           >
             <option value={90}>3s (90f)</option>
             <option value={150}>5s (150f)</option>
@@ -1249,14 +1257,14 @@ export const TimelinePanel: React.FC = () => {
             <option value={3600}>120s (3600f)</option>
           </select>
 
-          {/* CapCut-Style Timeline Zoom Controls (Out, Slider, In, %, Fit, Clip) */}
-          <div className="flex items-center gap-0.5 bg-[#070A10] border border-slate-700 rounded px-1 py-0.5">
+          {/* Timeline Zoom Controls (Out, Slider, In, %, Fit, Clip) */}
+          <div className="flex items-center gap-0.5 bg-white border border-slate-200 rounded px-1 py-0.5">
             <button
               type="button"
               onClick={() => handleZoomChange(timelineZoom * 0.8)}
               title="Zoom Out Timeline (-)"
               aria-label="Zoom Out Timeline"
-              className="p-0.5 text-slate-400 hover:text-white"
+              className="p-0.5 text-slate-500 hover:text-slate-900"
             >
               <ZoomOut className="w-3 h-3" />
             </button>
@@ -1268,20 +1276,20 @@ export const TimelinePanel: React.FC = () => {
               step={0.02}
               value={timelineZoom}
               onChange={(e) => handleZoomChange(Number(e.target.value))}
-              className="w-9 accent-cyan-400 cursor-pointer h-1"
+              className="w-10 accent-blue-600 cursor-pointer h-1"
             />
             <button
               type="button"
               onClick={() => handleZoomChange(timelineZoom * 1.25)}
               title="Zoom In Timeline (+)"
               aria-label="Zoom In Timeline"
-              className="p-0.5 text-slate-400 hover:text-white"
+              className="p-0.5 text-slate-500 hover:text-slate-900"
             >
               <ZoomIn className="w-3 h-3" />
             </button>
             <span
               data-testid="timeline-zoom-percentage"
-              className="text-[10px] font-mono text-cyan-300 min-w-[26px] text-center tabular-nums"
+              className="text-[10px] font-mono text-blue-600 font-semibold min-w-[26px] text-center tabular-nums"
             >
               {Math.round(timelineZoom * 100)}%
             </span>
@@ -1291,7 +1299,7 @@ export const TimelinePanel: React.FC = () => {
               onClick={handleFitToTimeline}
               title="Fit Entire Project to Timeline View"
               aria-label="Fit to Timeline"
-              className="px-1 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-[10px] font-mono text-slate-300 hover:text-white border border-slate-700 flex items-center gap-0.5"
+              className="px-1.5 py-0.5 rounded bg-slate-50 hover:bg-slate-100 text-[10px] font-mono text-slate-600 hover:text-slate-900 border border-slate-200 flex items-center gap-0.5"
             >
               <Maximize2 className="w-2.5 h-2.5" />
               Fit
@@ -1302,7 +1310,7 @@ export const TimelinePanel: React.FC = () => {
               onClick={handleZoomToSelectedClip}
               title="Zoom to Selected Clip or Drawing"
               aria-label="Zoom to Selected Clip"
-              className="px-1 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-[10px] font-mono text-cyan-300 hover:text-white border border-slate-700"
+              className="px-1.5 py-0.5 rounded bg-slate-50 hover:bg-slate-100 text-[10px] font-mono text-blue-600 hover:text-blue-700 border border-slate-200"
             >
               Clip
             </button>
@@ -1314,7 +1322,7 @@ export const TimelinePanel: React.FC = () => {
             aria-label={
               timelineCollapsed ? 'Expand timeline' : 'Collapse timeline'
             }
-            className="p-0.5 text-slate-300 hover:text-white rounded hover:bg-slate-800"
+            className="p-1 text-slate-500 hover:text-slate-900 rounded hover:bg-slate-200/70"
           >
             {timelineCollapsed ? (
               <ChevronUp className="w-3.5 h-3.5" />
@@ -1333,8 +1341,8 @@ export const TimelinePanel: React.FC = () => {
             className="flex-1 flex min-h-0 overflow-hidden"
           >
             {/* Left Column: Fixed Track Headers with Lock, Hide, Mute & Height Controls */}
-            <div className="w-44 sm:w-64 border-r border-slate-700/80 bg-[#0D1320] flex flex-col shrink-0">
-              <div className="h-6 px-2.5 border-b border-slate-700/80 bg-[#111827] flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-300">
+            <div className="w-44 sm:w-64 border-r border-slate-200 bg-white flex flex-col shrink-0">
+              <div className="h-6 px-2.5 border-b border-slate-200 bg-slate-50 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-500">
                 <span>Track / Layer</span>
                 <div className="flex items-center gap-1.5">
                   <button
@@ -1349,7 +1357,7 @@ export const TimelinePanel: React.FC = () => {
                       )
                     }
                     title={`Track Height: ${trackHeightMode} (Click to cycle)`}
-                    className="px-1 py-0.2 rounded bg-slate-800 hover:bg-slate-700 text-[9px] font-mono text-slate-300"
+                    className="px-1 py-0.2 rounded bg-white border border-slate-200 hover:bg-slate-100 text-[9px] font-mono text-slate-600"
                   >
                     H:{trackHeightMode[0].toUpperCase()}
                   </button>
@@ -1364,9 +1372,9 @@ export const TimelinePanel: React.FC = () => {
                       e.currentTarget.scrollTop;
                   }
                 }}
-                className="flex-1 overflow-y-auto divide-y divide-slate-800/80"
+                className="flex-1 overflow-y-auto divide-y divide-slate-100"
               >
-                {/* 1. Video & Audio Track Headers (Grouped by trackId so split segments share 1 track row) */}
+                {/* 1. Video & Audio Track Headers */}
                 {videoTrackGroups.map((group) => {
                   const isSelected = group.clips.some(
                     (c) => c.id === selectedClipId
@@ -1378,21 +1386,21 @@ export const TimelinePanel: React.FC = () => {
                       onClick={() => selectClip(primaryClip.id)}
                       className={`${rowHeightClass} px-2.5 flex items-center justify-between text-xs cursor-pointer transition-colors ${
                         isSelected
-                          ? 'bg-emerald-500/20 text-emerald-200 font-semibold'
-                          : 'text-slate-200 hover:bg-slate-800/60'
+                          ? 'bg-emerald-50 text-emerald-900 font-semibold'
+                          : 'text-slate-700 hover:bg-slate-50'
                       }`}
                     >
                       <div className="flex items-center gap-1.5 truncate">
-                        <Film className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <Film className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                         <span className="truncate">{group.label}</span>
                         {group.clips.length > 1 && (
-                          <span className="text-[9px] font-mono text-emerald-300 shrink-0">
+                          <span className="text-[9px] font-mono text-emerald-600 shrink-0">
                             · {group.clips.length} cuts
                           </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <span className="text-[10px] font-mono tabular-nums text-emerald-300/90">
+                        <span className="text-[10px] font-mono tabular-nums text-emerald-600">
                           {group.totalTrackFrames}f
                         </span>
                         <button
@@ -1406,10 +1414,10 @@ export const TimelinePanel: React.FC = () => {
                           }}
                           aria-label={group.muted ? 'Unmute track' : 'Mute track'}
                           title={group.muted ? 'Unmute Audio' : 'Mute Audio'}
-                          className="p-0.5 text-slate-300 hover:text-white"
+                          className="p-0.5 text-slate-400 hover:text-slate-700"
                         >
                           {group.muted ? (
-                            <VolumeX className="w-3 h-3 text-rose-400" />
+                            <VolumeX className="w-3 h-3 text-rose-500" />
                           ) : (
                             <Volume2 className="w-3 h-3" />
                           )}
@@ -1427,12 +1435,12 @@ export const TimelinePanel: React.FC = () => {
                             group.visible ? 'Hide video track' : 'Show video track'
                           }
                           title={group.visible ? 'Hide Track' : 'Show Track'}
-                          className="p-0.5 text-slate-400 hover:text-white"
+                          className="p-0.5 text-slate-400 hover:text-slate-700"
                         >
                           {group.visible ? (
                             <Eye className="w-3 h-3" />
                           ) : (
-                            <EyeOff className="w-3 h-3 text-amber-400" />
+                            <EyeOff className="w-3 h-3 text-amber-500" />
                           )}
                         </button>
                         <button
@@ -1448,10 +1456,10 @@ export const TimelinePanel: React.FC = () => {
                             group.locked ? 'Unlock video track' : 'Lock video track'
                           }
                           title={group.locked ? 'Unlock Track' : 'Lock Track'}
-                          className="p-0.5 text-slate-400 hover:text-white"
+                          className="p-0.5 text-slate-400 hover:text-slate-700"
                         >
                           {group.locked ? (
-                            <Lock className="w-3 h-3 text-amber-400" />
+                            <Lock className="w-3 h-3 text-amber-500" />
                           ) : (
                             <Unlock className="w-3 h-3" />
                           )}
@@ -1464,7 +1472,7 @@ export const TimelinePanel: React.FC = () => {
                             deleteSelectedClip();
                           }}
                           aria-label="Delete clip"
-                          className="p-0.5 text-slate-400 hover:text-rose-400"
+                          className="p-0.5 text-slate-400 hover:text-rose-600"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -1473,7 +1481,7 @@ export const TimelinePanel: React.FC = () => {
                   );
                 })}
 
-                {/* 2. Device Keyframe Track Headers + Expandable Property Sub-Rows (Cyan Accent) */}
+                {/* 2. Device Keyframe Track Headers + Expandable Property Sub-Rows */}
                 {devices.map((dev) => {
                   const isSelected = selectedIds.includes(dev.id);
                   const track = tracks.find((t) => t.targetId === dev.id);
@@ -1485,8 +1493,8 @@ export const TimelinePanel: React.FC = () => {
                         onClick={() => selectDevice(dev.id)}
                         className={`${rowHeightClass} px-2.5 flex items-center justify-between text-xs cursor-pointer transition-colors ${
                           isSelected
-                            ? 'bg-cyan-500/20 text-cyan-200 font-semibold'
-                            : 'text-slate-200 hover:bg-slate-800/60'
+                            ? 'bg-blue-50 text-blue-900 font-semibold'
+                            : 'text-slate-700 hover:bg-slate-50'
                         }`}
                       >
                         <div className="flex items-center gap-1 truncate">
@@ -1498,7 +1506,7 @@ export const TimelinePanel: React.FC = () => {
                                 toggleTrackExpanded(track.id);
                               }}
                               aria-label={`Toggle property tracks for ${dev.name}`}
-                              className="p-0.5 rounded hover:bg-slate-700 text-cyan-400 shrink-0"
+                              className="p-0.5 rounded hover:bg-slate-200/70 text-blue-600 shrink-0"
                             >
                               {isExpanded ? (
                                 <ChevronDown className="w-3 h-3" />
@@ -1510,7 +1518,7 @@ export const TimelinePanel: React.FC = () => {
                           <span className="truncate">{dev.name}</span>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
-                          <span className="text-[10px] font-mono tabular-nums text-cyan-300">
+                          <span className="text-[10px] font-mono tabular-nums text-blue-600">
                             {kfCount} kf
                           </span>
                           <button
@@ -1524,12 +1532,12 @@ export const TimelinePanel: React.FC = () => {
                                 ? `Hide ${dev.name}`
                                 : `Show ${dev.name}`
                             }
-                            className="p-0.5 text-slate-400 hover:text-white"
+                            className="p-0.5 text-slate-400 hover:text-slate-700"
                           >
                             {dev.visible ? (
                               <Eye className="w-3 h-3" />
                             ) : (
-                              <EyeOff className="w-3 h-3 text-amber-400" />
+                              <EyeOff className="w-3 h-3 text-amber-500" />
                             )}
                           </button>
                           <button
@@ -1543,10 +1551,10 @@ export const TimelinePanel: React.FC = () => {
                                 ? `Unlock ${dev.name}`
                                 : `Lock ${dev.name}`
                             }
-                            className="p-0.5 text-slate-400 hover:text-white"
+                            className="p-0.5 text-slate-400 hover:text-slate-700"
                           >
                             {dev.locked ? (
-                              <Lock className="w-3 h-3 text-amber-400" />
+                              <Lock className="w-3 h-3 text-amber-500" />
                             ) : (
                               <Unlock className="w-3 h-3" />
                             )}
@@ -1559,7 +1567,7 @@ export const TimelinePanel: React.FC = () => {
                             }}
                             title="Move Track Up"
                             aria-label={`Move ${dev.name} track up`}
-                            className="p-0.5 text-slate-400 hover:text-white"
+                            className="p-0.5 text-slate-400 hover:text-slate-700"
                           >
                             <ChevronUp className="w-3 h-3" />
                           </button>
@@ -1572,7 +1580,7 @@ export const TimelinePanel: React.FC = () => {
                             }}
                             title="Add Keyframe at Playhead"
                             aria-label={`Add keyframe for ${dev.name}`}
-                            className="p-0.5 rounded bg-cyan-500/20 hover:bg-cyan-400 hover:text-slate-950 text-cyan-300"
+                            className="p-0.5 rounded bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-600"
                           >
                             <Plus className="w-3 h-3" />
                           </button>
@@ -1584,7 +1592,7 @@ export const TimelinePanel: React.FC = () => {
                             }}
                             title="Reset Track to Single Keyframe"
                             aria-label={`Reset keyframes for ${dev.name}`}
-                            className="p-0.5 rounded hover:bg-slate-700 text-slate-400 hover:text-white"
+                            className="p-0.5 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-700"
                           >
                             <RotateCcw className="w-3 h-3" />
                           </button>
@@ -1603,9 +1611,9 @@ export const TimelinePanel: React.FC = () => {
                           <div
                             key={`${dev.id}-${propRow.key}`}
                             onClick={() => selectDevice(dev.id)}
-                            className="h-6 pl-7 pr-2.5 flex items-center justify-between text-[11px] bg-[#090E1A] text-slate-300 hover:bg-slate-800/40 cursor-pointer"
+                            className="h-6 pl-7 pr-2.5 flex items-center justify-between text-[11px] bg-slate-50/80 text-slate-600 hover:bg-slate-100 cursor-pointer"
                           >
-                            <span className="truncate font-mono text-[10px] text-cyan-300/90">
+                            <span className="truncate font-mono text-[10px] text-blue-700">
                               ↳ {propRow.label}
                             </span>
                             <span className="text-[9px] font-mono text-slate-400">
@@ -1617,7 +1625,146 @@ export const TimelinePanel: React.FC = () => {
                   );
                 })}
 
-                {/* 3. Neon Drawing & Vector Annotation Clip Track Headers (Purple Accent) */}
+                {/* 2.5. Webcam Overlay Track Headers */}
+                {webcams.map((wc) => {
+                  const isSelected = selectedWebcamId === wc.id;
+                  const track = tracks.find((t) => t.targetId === wc.id);
+                  const kfCount = track ? track.keyframes.length : 0;
+                  const isExpanded = Boolean(track?.expanded);
+                  return (
+                    <React.Fragment key={wc.id}>
+                      <div
+                        onClick={() => selectWebcam(wc.id)}
+                        className={`${rowHeightClass} px-2.5 flex items-center justify-between text-xs cursor-pointer transition-colors ${
+                          isSelected
+                            ? 'bg-blue-50 text-blue-900 font-semibold'
+                            : 'text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1 truncate">
+                          {track && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleTrackExpanded(track.id);
+                              }}
+                              aria-label={`Toggle property tracks for ${wc.name}`}
+                              className="p-0.5 rounded hover:bg-slate-200/70 text-blue-600 shrink-0"
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="w-3 h-3" />
+                              ) : (
+                                <ChevronRight className="w-3 h-3" />
+                              )}
+                            </button>
+                          )}
+                          <Camera className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          <span className="truncate">{wc.name}</span>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span className="text-[10px] font-mono tabular-nums text-blue-600">
+                            {kfCount} kf
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateWebcam(wc.id, { visible: !wc.visible });
+                            }}
+                            aria-label={
+                              wc.visible ? `Hide ${wc.name}` : `Show ${wc.name}`
+                            }
+                            className="p-0.5 text-slate-400 hover:text-slate-700"
+                          >
+                            {wc.visible ? (
+                              <Eye className="w-3 h-3" />
+                            ) : (
+                              <EyeOff className="w-3 h-3 text-amber-500" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              updateWebcam(wc.id, { locked: !wc.locked });
+                            }}
+                            aria-label={
+                              wc.locked ? `Unlock ${wc.name}` : `Lock ${wc.name}`
+                            }
+                            className="p-0.5 text-slate-400 hover:text-slate-700"
+                          >
+                            {wc.locked ? (
+                              <Lock className="w-3 h-3 text-amber-500" />
+                            ) : (
+                              <Unlock className="w-3 h-3" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              selectWebcam(wc.id);
+                              addKeyframeAtCurrentFrame(wc.id, selectedEasing);
+                            }}
+                            title="Add Webcam Keyframe at Playhead"
+                            aria-label={`Add keyframe for ${wc.name}`}
+                            className="p-0.5 rounded bg-blue-50 hover:bg-blue-600 hover:text-white text-blue-600"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              duplicateWebcam(wc.id);
+                            }}
+                            title="Duplicate Webcam Overlay"
+                            className="p-0.5 text-slate-400 hover:text-slate-700"
+                          >
+                            <Copy className="w-3 h-3" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteWebcam(wc.id);
+                            }}
+                            title="Delete Webcam Overlay"
+                            className="p-0.5 text-slate-400 hover:text-rose-600"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {isExpanded &&
+                        (
+                          [
+                            { key: 'pos', label: 'Position (X, Y)' },
+                            { key: 'scale', label: 'Size & Scale (W, H)' },
+                            { key: 'border', label: 'Border & Glow Intensity' },
+                            { key: 'curve', label: 'Curve & Video Zoom' },
+                          ] as const
+                        ).map((propRow) => (
+                          <div
+                            key={`${wc.id}-${propRow.key}`}
+                            onClick={() => selectWebcam(wc.id)}
+                            className="h-6 pl-7 pr-2.5 flex items-center justify-between text-[11px] bg-slate-50/80 text-slate-600 hover:bg-slate-100 cursor-pointer"
+                          >
+                            <span className="truncate font-mono text-[10px] text-blue-700">
+                              ↳ {propRow.label}
+                            </span>
+                            <span className="text-[9px] font-mono text-slate-400">
+                              {kfCount} pts
+                            </span>
+                          </div>
+                        ))}
+                    </React.Fragment>
+                  );
+                })}
+
+                {/* 3. Drawing & Vector Annotation Clip Track Headers */}
                 {drawings.map((dr) => {
                   const isSelected = selectedDrawingId === dr.id;
                   const track = tracks.find((t) => t.targetId === dr.id);
@@ -1629,16 +1776,16 @@ export const TimelinePanel: React.FC = () => {
                       onClick={() => selectDrawing(dr.id)}
                       className={`${rowHeightClass} px-2.5 flex items-center justify-between text-xs cursor-pointer transition-colors ${
                         isSelected
-                          ? 'bg-purple-500/20 text-purple-200 font-semibold'
-                          : 'text-slate-200 hover:bg-slate-800/60'
+                          ? 'bg-indigo-50 text-indigo-900 font-semibold'
+                          : 'text-slate-700 hover:bg-slate-50'
                       }`}
                     >
                       <div className="flex items-center gap-1.5 truncate">
-                        <PenTool className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                        <PenTool className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
                         <span className="truncate">{dr.name}</span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
-                        <span className="text-[10px] font-mono tabular-nums text-purple-300/90">
+                        <span className="text-[10px] font-mono tabular-nums text-indigo-600">
                           {drDur}f · {kfCount}kf
                         </span>
                         <button
@@ -1650,12 +1797,12 @@ export const TimelinePanel: React.FC = () => {
                           aria-label={
                             dr.visible ? `Hide ${dr.name}` : `Show ${dr.name}`
                           }
-                          className="p-0.5 text-slate-400 hover:text-white"
+                          className="p-0.5 text-slate-400 hover:text-slate-700"
                         >
                           {dr.visible ? (
                             <Eye className="w-3 h-3" />
                           ) : (
-                            <EyeOff className="w-3 h-3 text-amber-400" />
+                            <EyeOff className="w-3 h-3 text-amber-500" />
                           )}
                         </button>
                         <button
@@ -1669,10 +1816,10 @@ export const TimelinePanel: React.FC = () => {
                               ? `Unlock ${dr.name}`
                               : `Lock ${dr.name}`
                           }
-                          className="p-0.5 text-slate-400 hover:text-white"
+                          className="p-0.5 text-slate-400 hover:text-slate-700"
                         >
                           {dr.locked ? (
-                            <Lock className="w-3 h-3 text-amber-400" />
+                            <Lock className="w-3 h-3 text-amber-500" />
                           ) : (
                             <Unlock className="w-3 h-3" />
                           )}
@@ -1686,7 +1833,7 @@ export const TimelinePanel: React.FC = () => {
                           }}
                           aria-label={`Add keyframe for ${dr.name}`}
                           title="Add Drawing Keyframe at Playhead"
-                          className="p-0.5 rounded bg-purple-500/20 hover:bg-purple-400 hover:text-slate-950 text-purple-300"
+                          className="p-0.5 rounded bg-indigo-50 hover:bg-indigo-600 hover:text-white text-indigo-600"
                         >
                           <Plus className="w-3 h-3" />
                         </button>
@@ -1698,7 +1845,7 @@ export const TimelinePanel: React.FC = () => {
                           }}
                           aria-label={`Duplicate drawing ${dr.name}`}
                           title="Duplicate Drawing Clip"
-                          className="p-0.5 text-slate-400 hover:text-white"
+                          className="p-0.5 text-slate-400 hover:text-slate-700"
                         >
                           <Copy className="w-3 h-3" />
                         </button>
@@ -1710,7 +1857,7 @@ export const TimelinePanel: React.FC = () => {
                           }}
                           aria-label={`Delete drawing ${dr.name}`}
                           title="Delete Drawing Clip"
-                          className="p-0.5 text-slate-400 hover:text-rose-400"
+                          className="p-0.5 text-slate-400 hover:text-rose-600"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -1733,7 +1880,7 @@ export const TimelinePanel: React.FC = () => {
                     e.currentTarget.scrollTop;
                 }
               }}
-              className="flex-1 flex flex-col relative bg-[#070A10] overflow-x-auto overflow-y-auto"
+              className="flex-1 flex flex-col relative bg-slate-50/70 overflow-x-auto overflow-y-auto"
             >
               <div
                 ref={trackLaneContainerRef}
@@ -1744,11 +1891,11 @@ export const TimelinePanel: React.FC = () => {
                 }}
                 className="flex-1 flex flex-col relative"
               >
-                {/* CapCut-Style Adaptive Time & Frame Ruler with Pixel-Exact Ticks */}
+                {/* Adaptive Time & Frame Ruler with Pixel-Exact Ticks */}
                 <div
                   data-testid="timeline-ruler"
                   onMouseDown={handleRulerScrubStart}
-                  className="h-6 border-b border-slate-700/80 bg-[#111827] relative cursor-ew-resize flex items-center sticky top-0 z-20"
+                  className="h-6 border-b border-slate-200 bg-slate-100/90 relative cursor-ew-resize flex items-center sticky top-0 z-20"
                 >
                   {rulerTicks.map((tick) => (
                     <div
@@ -1757,7 +1904,7 @@ export const TimelinePanel: React.FC = () => {
                       className="absolute top-0 bottom-0 flex flex-col justify-end pointer-events-none"
                     >
                       {tick.isMajor ? (
-                        <div className="border-l border-slate-400/90 pl-1.5 flex items-center h-full text-[10px] font-mono tabular-nums text-slate-100 whitespace-nowrap">
+                        <div className="border-l border-slate-300 pl-1.5 flex items-center h-full text-[10px] font-mono tabular-nums text-slate-700 whitespace-nowrap">
                           <span className="font-semibold">
                             {tick.timecodeLabel}
                           </span>
@@ -1766,9 +1913,9 @@ export const TimelinePanel: React.FC = () => {
                           </span>
                         </div>
                       ) : (
-                        <div className="h-2.5 border-l border-slate-700/90 flex items-end pl-0.5">
+                        <div className="h-2.5 border-l border-slate-200 flex items-end pl-0.5">
                           {tick.showFrameDetail && (
-                            <span className="text-[8px] font-mono text-slate-500 leading-none pb-0.5">
+                            <span className="text-[8px] font-mono text-slate-400 leading-none pb-0.5">
                               {tick.frameLabel}
                             </span>
                           )}
@@ -1779,14 +1926,14 @@ export const TimelinePanel: React.FC = () => {
                 </div>
 
                 {/* Track Lanes Container */}
-                <div className="flex-1 divide-y divide-slate-800/80 relative">
+                <div className="flex-1 divide-y divide-slate-200/70 relative">
                   {/* 1. Grouped Video & Audio Clip Lanes with Filmstrip Thumbnails & Trim Handles */}
                   {videoTrackGroups.map((group) => (
                     <div
                       key={group.trackId}
                       data-testid={`video-track-lane-${group.trackId}`}
                       onMouseDown={handleRulerScrubStart}
-                      className={`${rowHeightClass} relative flex items-center bg-[#090E18]/90 hover:bg-[#0D1524]`}
+                      className={`${rowHeightClass} relative flex items-center bg-white hover:bg-slate-50/80`}
                     >
                       {group.clips.map((clip) => {
                         const clipLeftPx = frameToPixel(
@@ -1846,8 +1993,8 @@ export const TimelinePanel: React.FC = () => {
                             }}
                             className={`absolute ${clipBarHeightClass} rounded-md border flex items-center overflow-hidden cursor-grab active:cursor-grabbing transition-shadow ${
                               isSelected
-                                ? 'bg-emerald-950/90 border-emerald-300 ring-2 ring-emerald-400/70 z-10'
-                                : 'bg-emerald-950/75 border-emerald-500/60 hover:border-emerald-300'
+                                ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/30 z-10'
+                                : 'bg-emerald-50/70 border-emerald-300 hover:border-emerald-500'
                             } ${!clip.visible ? 'opacity-40' : ''}`}
                           >
                             {/* Left Draggable In-Point Trim Handle */}
@@ -1868,24 +2015,24 @@ export const TimelinePanel: React.FC = () => {
                                 });
                               }}
                               title="Drag to trim clip Source In-Point (Start)"
-                              className="w-2.5 h-full bg-emerald-400 hover:bg-white text-slate-950 flex items-center justify-center cursor-ew-resize shrink-0 z-20 font-mono text-[9px] font-bold"
+                              className="w-2.5 h-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center cursor-ew-resize shrink-0 z-20 font-mono text-[9px] font-bold"
                             >
                               [
                             </div>
 
-                            {/* CapCut-Style Asynchronous / Procedural Filmstrip Thumbnail Strip */}
+                            {/* Filmstrip Thumbnail Strip */}
                             <div className="flex-1 h-full relative overflow-hidden flex items-center">
-                              <div className="absolute inset-0 flex divide-x divide-emerald-500/20 pointer-events-none">
+                              <div className="absolute inset-0 flex divide-x divide-emerald-200/70 pointer-events-none">
                                 {thumbs.map((th) => (
                                   <div
                                     key={th.index}
                                     style={{
-                                      background: `linear-gradient(135deg, hsla(${th.accentHue}, 65%, 16%, 0.85), hsla(${(th.accentHue + 40) % 360}, 70%, 10%, 0.92))`,
+                                      background: `linear-gradient(135deg, hsla(${th.accentHue}, 65%, 94%, 0.9), hsla(${(th.accentHue + 40) % 360}, 70%, 90%, 0.9))`,
                                     }}
                                     className="flex-1 h-full px-1 flex items-end justify-end overflow-hidden pb-0.5"
                                   >
                                     {clipWidthPx >= 90 && (
-                                      <span className="text-[7.5px] font-mono text-emerald-300/60 leading-none">
+                                      <span className="text-[7.5px] font-mono text-emerald-700/70 leading-none">
                                         {th.sceneLabel}·{th.sourceSeconds}s
                                       </span>
                                     )}
@@ -1895,11 +2042,11 @@ export const TimelinePanel: React.FC = () => {
 
                               {/* Clip Label, Start/End/Duration Timing & Source In/Out Readout */}
                               <div className="relative z-10 w-full px-1.5 flex items-center justify-between pointer-events-none">
-                                <span className="text-[10px] font-semibold text-white truncate bg-slate-950/85 border border-emerald-500/30 px-1.5 py-0.2 rounded shadow-sm max-w-[58%]">
+                                <span className="text-[10px] font-semibold text-emerald-950 truncate bg-white/90 border border-emerald-200 px-1.5 py-0.2 rounded shadow-2xs max-w-[58%]">
                                   {clip.name}
                                 </span>
                                 {clipWidthPx >= 130 && (
-                                  <span className="text-[9px] font-mono tabular-nums text-emerald-200 ml-1 shrink-0 bg-slate-950/90 border border-emerald-500/30 px-1.5 py-0.2 rounded">
+                                  <span className="text-[9px] font-mono tabular-nums text-emerald-800 ml-1 shrink-0 bg-white/90 border border-emerald-200 px-1.5 py-0.2 rounded">
                                     {durSec}s ({clip.durationFrames}f · In:F
                                     {clip.trimStartFrames}→Out:F{outFrame})
                                   </span>
@@ -1908,7 +2055,7 @@ export const TimelinePanel: React.FC = () => {
 
                               {/* Audio Sync Waveform Bars along bottom of clip */}
                               {!clip.muted && (
-                                <div className="absolute inset-x-1 bottom-0 h-1.5 flex items-end gap-0.5 opacity-35 pointer-events-none">
+                                <div className="absolute inset-x-1 bottom-0 h-1.5 flex items-end gap-0.5 opacity-45 pointer-events-none">
                                   {(clip.waveformPeaks || [])
                                     .slice(0, 48)
                                     .map((peak, i) => (
@@ -1917,7 +2064,7 @@ export const TimelinePanel: React.FC = () => {
                                         style={{
                                           height: `${Math.round(peak * 100)}%`,
                                         }}
-                                        className="flex-1 bg-emerald-300 rounded-t-sm"
+                                        className="flex-1 bg-emerald-600 rounded-t-sm"
                                       />
                                     ))}
                                 </div>
@@ -1942,7 +2089,7 @@ export const TimelinePanel: React.FC = () => {
                                 });
                               }}
                               title="Drag to trim clip Source Out-Point (End)"
-                              className="w-2.5 h-full bg-emerald-400 hover:bg-white text-slate-950 flex items-center justify-center cursor-ew-resize shrink-0 z-20 font-mono text-[9px] font-bold"
+                              className="w-2.5 h-full bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center cursor-ew-resize shrink-0 z-20 font-mono text-[9px] font-bold"
                             >
                               ]
                             </div>
@@ -1965,10 +2112,10 @@ export const TimelinePanel: React.FC = () => {
                           onMouseDown={handleRulerScrubStart}
                           onClick={() => selectDevice(dev.id)}
                           className={`${rowHeightClass} relative flex items-center ${
-                            isSelected ? 'bg-cyan-950/25' : 'bg-[#070A10]'
-                          } hover:bg-[#0E1525]`}
+                            isSelected ? 'bg-blue-50/50' : 'bg-white'
+                          } hover:bg-slate-50/80`}
                         >
-                          <div className="absolute left-0 right-0 h-0.5 bg-cyan-500/30 pointer-events-none" />
+                          <div className="absolute left-0 right-0 h-0.5 bg-blue-200 pointer-events-none" />
 
                           {keyframes.map((kf, idx) => {
                             const kfLeftPx = frameToPixel(
@@ -1996,7 +2143,7 @@ export const TimelinePanel: React.FC = () => {
                                         nextLeftPx - kfLeftPx
                                       )}px`,
                                     }}
-                                    className="absolute h-1.5 bg-gradient-to-r from-cyan-400/45 to-sky-500/45 rounded-full pointer-events-none"
+                                    className="absolute h-1.5 bg-blue-200/80 rounded-full pointer-events-none"
                                   />
                                 )}
                                 <button
@@ -2028,8 +2175,8 @@ export const TimelinePanel: React.FC = () => {
                                   aria-label={`Keyframe at frame ${kf.frame}`}
                                   className={`absolute -translate-x-1/2 w-3.5 h-3.5 rotate-45 border-2 transition-transform z-10 ${
                                     isKfSelected
-                                      ? 'bg-amber-400 border-white scale-125 shadow-[0_0_10px_#FBBF24]'
-                                      : 'bg-cyan-400 border-slate-950 hover:scale-125 shadow-[0_0_6px_rgba(34,211,238,0.8)]'
+                                      ? 'bg-amber-500 border-white scale-125 shadow-sm'
+                                      : 'bg-blue-600 border-white hover:scale-125 shadow-xs'
                                   }`}
                                 />
                               </React.Fragment>
@@ -2043,9 +2190,9 @@ export const TimelinePanel: React.FC = () => {
                               <div
                                 key={`${dev.id}-lane-${propKey}`}
                                 onMouseDown={handleRulerScrubStart}
-                                className="h-6 relative flex items-center bg-[#060911] border-t border-slate-900"
+                                className="h-6 relative flex items-center bg-slate-50 border-t border-slate-100"
                               >
-                                <div className="absolute left-0 right-0 h-px bg-slate-800 pointer-events-none" />
+                                <div className="absolute left-0 right-0 h-px bg-slate-200 pointer-events-none" />
                                 {keyframes.map((kf) => {
                                   const kfLeftPx = frameToPixel(
                                     kf.frame,
@@ -2070,10 +2217,10 @@ export const TimelinePanel: React.FC = () => {
                                           keyframeId: kf.id,
                                         });
                                       }}
-                                      className={`absolute -translate-x-1/2 w-2.5 h-2.5 rotate-45 border border-slate-950 cursor-ew-resize ${
+                                      className={`absolute -translate-x-1/2 w-2.5 h-2.5 rotate-45 border border-white cursor-ew-resize ${
                                         propKey === 'glow'
-                                          ? 'bg-purple-400/90 hover:bg-amber-300'
-                                          : 'bg-cyan-300/80 hover:bg-amber-300'
+                                          ? 'bg-indigo-500 hover:bg-amber-500'
+                                          : 'bg-blue-500 hover:bg-amber-500'
                                       }`}
                                     />
                                   );
@@ -2085,7 +2232,136 @@ export const TimelinePanel: React.FC = () => {
                     );
                   })}
 
-                  {/* 3. Neon Drawing & Annotation Clip Lanes with Draggable Trim Handles & Keyframe Diamonds */}
+                  {/* 2.5. Webcam Overlay Keyframe Lanes + Expanded Property Sub-Lanes */}
+                  {webcams.map((wc) => {
+                    const isSelected = selectedWebcamId === wc.id;
+                    const track = tracks.find((t) => t.targetId === wc.id);
+                    const keyframes = track ? track.keyframes : [];
+                    const isExpanded = Boolean(track?.expanded);
+
+                    return (
+                      <React.Fragment key={wc.id}>
+                        <div
+                          onMouseDown={handleRulerScrubStart}
+                          onClick={() => selectWebcam(wc.id)}
+                          className={`${rowHeightClass} relative flex items-center ${
+                            isSelected ? 'bg-blue-50/50' : 'bg-white'
+                          } hover:bg-slate-50/80`}
+                        >
+                          <div className="absolute left-0 right-0 h-0.5 bg-blue-200 pointer-events-none" />
+
+                          {keyframes.map((kf, idx) => {
+                            const kfLeftPx = frameToPixel(
+                              kf.frame,
+                              timelineZoom,
+                              0,
+                              fps
+                            );
+                            const nextKf = keyframes[idx + 1];
+                            const nextLeftPx = nextKf
+                              ? frameToPixel(nextKf.frame, timelineZoom, 0, fps)
+                              : null;
+                            const isKfSelected =
+                              selectedKeyframe?.trackId === track?.id &&
+                              selectedKeyframe?.keyframeId === kf.id;
+
+                            return (
+                              <React.Fragment key={kf.id}>
+                                {nextLeftPx !== null && (
+                                  <div
+                                    style={{
+                                      left: `${kfLeftPx}px`,
+                                      width: `${Math.max(
+                                        0,
+                                        nextLeftPx - kfLeftPx
+                                      )}px`,
+                                    }}
+                                    className="absolute h-1.5 bg-blue-200/80 rounded-full pointer-events-none"
+                                  />
+                                )}
+                                <button
+                                  type="button"
+                                  style={{ left: `${kfLeftPx}px` }}
+                                  onMouseDown={(e) => {
+                                    e.stopPropagation();
+                                    if (!track || wc.locked) return;
+                                    selectWebcam(wc.id);
+                                    setSelectedKeyframe({
+                                      trackId: track.id,
+                                      keyframeId: kf.id,
+                                    });
+                                    setCurrentFrame(kf.frame);
+                                    setDraggingKf({
+                                      trackId: track.id,
+                                      keyframeId: kf.id,
+                                    });
+                                  }}
+                                  onDoubleClick={(e) => {
+                                    e.stopPropagation();
+                                    if (!track || wc.locked) return;
+                                    duplicateKeyframe(track.id, kf.id);
+                                  }}
+                                  title={`Webcam Keyframe at F${kf.frame} (${formatTimecode(
+                                    kf.frame,
+                                    fps
+                                  )}) · Easing: ${kf.easing}`}
+                                  aria-label={`Webcam keyframe at frame ${kf.frame}`}
+                                  className={`absolute -translate-x-1/2 w-3.5 h-3.5 rotate-45 border-2 transition-transform z-10 ${
+                                    isKfSelected
+                                      ? 'bg-amber-500 border-white scale-125 shadow-sm'
+                                      : 'bg-blue-600 border-white hover:scale-125 shadow-xs'
+                                  }`}
+                                />
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
+
+                        {isExpanded &&
+                          (['pos', 'scale', 'border', 'curve'] as const).map(
+                            (propKey) => (
+                              <div
+                                key={`${wc.id}-lane-${propKey}`}
+                                onMouseDown={handleRulerScrubStart}
+                                className="h-6 relative flex items-center bg-slate-50 border-t border-slate-100"
+                              >
+                                <div className="absolute left-0 right-0 h-px bg-slate-200 pointer-events-none" />
+                                {keyframes.map((kf) => {
+                                  const kfLeftPx = frameToPixel(
+                                    kf.frame,
+                                    timelineZoom,
+                                    0,
+                                    fps
+                                  );
+                                  return (
+                                    <div
+                                      key={`${kf.id}-${propKey}`}
+                                      style={{ left: `${kfLeftPx}px` }}
+                                      onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        if (!track || wc.locked) return;
+                                        setSelectedKeyframe({
+                                          trackId: track.id,
+                                          keyframeId: kf.id,
+                                        });
+                                        setCurrentFrame(kf.frame);
+                                        setDraggingKf({
+                                          trackId: track.id,
+                                          keyframeId: kf.id,
+                                        });
+                                      }}
+                                      className="absolute -translate-x-1/2 w-2.5 h-2.5 rotate-45 border border-white cursor-ew-resize bg-blue-500 hover:bg-amber-500"
+                                    />
+                                  );
+                                })}
+                              </div>
+                            )
+                          )}
+                      </React.Fragment>
+                    );
+                  })}
+
+                  {/* 3. Drawing & Annotation Clip Lanes with Draggable Trim Handles & Keyframe Diamonds */}
                   {drawings.map((dr) => {
                     const drStart = dr.startFrame ?? 0;
                     const drDur = dr.durationFrames ?? durationInFrames;
@@ -2108,7 +2384,7 @@ export const TimelinePanel: React.FC = () => {
                         data-testid={`drawing-timeline-lane-${dr.id}`}
                         onMouseDown={handleRulerScrubStart}
                         onClick={() => selectDrawing(dr.id)}
-                        className={`${rowHeightClass} relative flex items-center bg-[#090C15] hover:bg-[#0D1120]`}
+                        className={`${rowHeightClass} relative flex items-center bg-white hover:bg-slate-50/80`}
                       >
                         <div
                           data-testid={`drawing-timeline-clip-${dr.id}`}
@@ -2138,8 +2414,8 @@ export const TimelinePanel: React.FC = () => {
                           }}
                           className={`absolute ${clipBarHeightClass} rounded-md border flex items-center overflow-hidden cursor-grab active:cursor-grabbing transition-shadow ${
                             isSelected
-                              ? 'bg-purple-500/35 border-purple-300 ring-2 ring-purple-400/60 z-10'
-                              : 'bg-purple-950/75 border-purple-500/60 hover:border-purple-400'
+                              ? 'bg-indigo-50 border-indigo-500 ring-2 ring-indigo-500/30 z-10'
+                              : 'bg-indigo-50/70 border-indigo-300 hover:border-indigo-500'
                           } ${!dr.visible ? 'opacity-40' : ''}`}
                         >
                           {/* Left Draggable In-Point Trim Handle for Drawing Clip */}
@@ -2161,18 +2437,18 @@ export const TimelinePanel: React.FC = () => {
                               });
                             }}
                             title="Drag to trim drawing start frame (In-Point)"
-                            className="w-2.5 h-full bg-purple-400 hover:bg-white text-slate-950 flex items-center justify-center cursor-ew-resize shrink-0 z-10 font-mono text-[9px] font-bold"
+                            className="w-2.5 h-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center cursor-ew-resize shrink-0 z-10 font-mono text-[9px] font-bold"
                           >
                             [
                           </div>
 
                           {/* Drawing Clip Label & Timing Readout */}
                           <div className="flex-1 h-full px-2 flex items-center justify-between relative overflow-hidden">
-                            <span className="text-[10px] font-semibold text-white truncate z-10 drop-shadow">
+                            <span className="text-[10px] font-semibold text-indigo-950 truncate z-10">
                               {dr.name}
                             </span>
                             {widthPx >= 110 && (
-                              <span className="text-[9px] font-mono tabular-nums text-purple-200 z-10 ml-2 shrink-0 bg-slate-950/75 px-1.5 py-0.2 rounded">
+                              <span className="text-[9px] font-mono tabular-nums text-indigo-800 z-10 ml-2 shrink-0 bg-white/90 border border-indigo-200 px-1.5 py-0.2 rounded">
                                 F{drStart}–F{drEnd} ({drDur}f ·{' '}
                                 {dr.animationMode})
                               </span>
@@ -2198,7 +2474,7 @@ export const TimelinePanel: React.FC = () => {
                               });
                             }}
                             title="Drag to trim drawing end frame (Out-Point)"
-                            className="w-2.5 h-full bg-purple-400 hover:bg-white text-slate-950 flex items-center justify-center cursor-ew-resize shrink-0 z-10 font-mono text-[9px] font-bold"
+                            className="w-2.5 h-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center cursor-ew-resize shrink-0 z-10 font-mono text-[9px] font-bold"
                           >
                             ]
                           </div>
@@ -2238,8 +2514,8 @@ export const TimelinePanel: React.FC = () => {
                               aria-label={`Drawing keyframe at frame ${kf.frame}`}
                               className={`absolute -translate-x-1/2 w-3.5 h-3.5 rotate-45 border-2 z-20 ${
                                 isKfSelected
-                                  ? 'bg-amber-400 border-white scale-125'
-                                  : 'bg-purple-300 border-slate-950 hover:scale-125'
+                                  ? 'bg-amber-500 border-white scale-125'
+                                  : 'bg-indigo-600 border-white hover:scale-125'
                               }`}
                             />
                           );
@@ -2254,18 +2530,18 @@ export const TimelinePanel: React.FC = () => {
                   draggingDrawingClip?.livePreviewLabel) && (
                   <div
                     style={{ left: `${Math.max(16, playheadPx)}px` }}
-                    className="fixed bottom-64 z-50 -translate-x-1/2 px-2.5 py-1 rounded bg-slate-950/95 border border-emerald-400 text-emerald-200 text-[11px] font-mono tabular-nums shadow-lg pointer-events-none"
+                    className="fixed bottom-64 z-50 -translate-x-1/2 px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-white text-[11px] font-mono tabular-nums shadow-md pointer-events-none"
                   >
                     {draggingClip?.livePreviewLabel ||
                       draggingDrawingClip?.livePreviewLabel}
                   </div>
                 )}
 
-                {/* High-Contrast Playhead Line & Draggable Handle (Aligned via shared frameToPixel) */}
+                {/* High-Contrast Playhead Line & Draggable Handle */}
                 <div
                   data-testid="timeline-playhead"
                   style={{ left: `${playheadPx}px` }}
-                  className="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none z-30 shadow-[0_0_8px_#F43F5E]"
+                  className="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none z-30"
                 >
                   <div
                     className={`inline-block w-max px-1.5 py-0.5 ${
@@ -2274,7 +2550,7 @@ export const TimelinePanel: React.FC = () => {
                         : playheadPx > metrics.totalWidthPx - 96
                           ? '-translate-x-full'
                           : '-translate-x-1/2'
-                    } bg-rose-600 text-white text-[9px] font-mono font-bold rounded-b shadow-md whitespace-nowrap`}
+                    } bg-rose-600 text-white text-[9px] font-mono font-bold rounded-b shadow-sm whitespace-nowrap`}
                   >
                     F{currentFrame} · {formatShortTimecode(currentFrame, fps)}
                   </div>
@@ -2283,18 +2559,18 @@ export const TimelinePanel: React.FC = () => {
             </div>
           </div>
 
-          {/* Dedicated Bottom CapCut-Style Horizontal Scrollbar & Navigation Bar */}
+          {/* Dedicated Bottom Horizontal Scrollbar & Navigation Bar */}
           <div
             data-testid="timeline-horizontal-scrollbar"
-            className="h-6 bg-[#0D1320] border-t border-slate-800 px-2.5 flex items-center gap-2 shrink-0"
+            className="h-6 bg-slate-50 border-t border-slate-200 px-2.5 flex items-center gap-2 shrink-0"
           >
-            <div className="flex items-center gap-1.5 text-[10px] font-mono tabular-nums text-slate-400 shrink-0">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono tabular-nums text-slate-500 shrink-0">
               <span>
                 View: {formatTimecode(visibleStartFrame, fps)} –{' '}
                 {formatTimecode(visibleEndFrame, fps)}
               </span>
-              <span className="text-slate-600">·</span>
-              <span className="text-cyan-300">
+              <span className="text-slate-300">·</span>
+              <span className="text-blue-600 font-semibold">
                 {Math.round(metrics.pixelsPerSecond)}px/s
               </span>
             </div>
@@ -2320,7 +2596,7 @@ export const TimelinePanel: React.FC = () => {
                 scrollEl.scrollLeft = nextScroll;
                 setScrollOffset(nextScroll);
               }}
-              className="flex-1 h-3.5 bg-[#070A10] border border-slate-700/90 rounded relative cursor-pointer overflow-hidden"
+              className="flex-1 h-3.5 bg-slate-200/80 border border-slate-300 rounded relative cursor-pointer overflow-hidden"
             >
               <div
                 data-testid="timeline-scrollbar-thumb"
@@ -2338,9 +2614,9 @@ export const TimelinePanel: React.FC = () => {
                   });
                 }}
                 title="Drag horizontal scrollbar thumb to navigate across the entire project"
-                className="absolute top-0.5 bottom-0.5 rounded-sm bg-cyan-500/40 hover:bg-cyan-400/60 active:bg-cyan-300/80 border border-cyan-400/60 cursor-grab active:cursor-grabbing flex items-center justify-center"
+                className="absolute top-0.5 bottom-0.5 rounded-sm bg-white hover:bg-blue-50 active:bg-blue-100 border border-slate-300 cursor-grab active:cursor-grabbing flex items-center justify-center shadow-2xs"
               >
-                <div className="w-3 h-1 border-x border-cyan-200/70" />
+                <div className="w-3 h-1 border-x border-slate-400" />
               </div>
             </div>
 
@@ -2351,7 +2627,7 @@ export const TimelinePanel: React.FC = () => {
                 onClick={() => addLongDemoVideo(60)}
                 data-testid="timeline-add-60s-video"
                 title="Load a 60-second (1800-frame) multi-scene video onto the timeline"
-                className="px-1.5 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-[10px] font-mono text-emerald-300"
+                className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-100 border border-slate-200 text-[10px] font-mono text-emerald-700 font-semibold"
               >
                 + 60s Video
               </button>
@@ -2360,11 +2636,12 @@ export const TimelinePanel: React.FC = () => {
                 onClick={() => setAutoScrollTimeline(!autoScrollTimeline)}
                 aria-pressed={autoScrollTimeline}
                 data-testid="toggle-auto-scroll"
+                data-active={autoScrollTimeline}
                 title="Toggle automatic timeline scrolling during playback"
                 className={`px-1.5 py-0.5 rounded text-[10px] font-mono border ${
                   autoScrollTimeline
-                    ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300'
-                    : 'bg-slate-900 border-slate-700 text-slate-400'
+                    ? 'bg-blue-50 border-blue-200 text-blue-700 font-semibold'
+                    : 'bg-white border-slate-200 text-slate-500'
                 }`}
               >
                 Auto-Scroll

@@ -1,13 +1,18 @@
 import type {
   AnimationPresetId,
   BrowserThemeConfig,
+  CustomBezierControlPoints,
   DeviceCategory,
   DevicePreset,
+  DeviceTransitionPreset,
+  EasingType,
   ObjectEffects,
   SceneBackground,
   SceneWebcamOverlay,
   ScreenTransform,
   ThemePalettePreset,
+  TransitionPresetCategory,
+  TransitionPresetGroup,
   WebcamBorderAnimationMode,
   WebcamFrameShapeType,
   WebcamGlowType,
@@ -227,79 +232,421 @@ export const DEFAULT_BROWSER_THEME: BrowserThemeConfig = {
   customUrlText: 'https://studio.device.app/live',
 };
 
+export const TRANSITION_CATEGORIES: {
+  id: TransitionPresetCategory | 'All';
+  label: string;
+}[] = [
+  { id: 'All', label: 'All' },
+  { id: 'Slide', label: 'Slide' },
+  { id: 'Fade', label: 'Fade' },
+  { id: 'Zoom', label: 'Zoom' },
+  { id: '3D', label: '3D' },
+  { id: 'Loop', label: 'Loop' },
+];
+
+export const TRANSITION_PRESET_GROUPS: {
+  id: TransitionPresetGroup;
+  label: string;
+  description: string;
+}[] = [
+  {
+    id: 'Entrances',
+    label: 'Entrances',
+    description: 'Stage reveal and arrival transitions',
+  },
+  {
+    id: 'Exits',
+    label: 'Exits',
+    description: 'Stage departure and dissolve transitions',
+  },
+  {
+    id: 'Emphasis',
+    label: 'Emphasis',
+    description: 'Continuous loops, camera focus, and neon highlights',
+  },
+];
+
+export const EASING_FUNCTION_OPTIONS: {
+  id: EasingType;
+  label: string;
+  shortLabel: string;
+  description: string;
+  svgPath: string;
+}[] = [
+  {
+    id: 'ease-out',
+    label: 'Ease-Out',
+    shortLabel: 'Ease-Out',
+    description: 'Fast entrance with smooth natural deceleration',
+    svgPath: 'M 2 18 C 6 4, 12 2, 22 2',
+  },
+  {
+    id: 'ease-in',
+    label: 'Ease-In',
+    shortLabel: 'Ease-In',
+    description: 'Gradual start that accelerates toward completion',
+    svgPath: 'M 2 18 C 12 18, 18 14, 22 2',
+  },
+  {
+    id: 'ease-in-out',
+    label: 'Ease-In-Out',
+    shortLabel: 'Ease-In-Out',
+    description: 'Symmetrical acceleration and smooth landing',
+    svgPath: 'M 2 18 C 10 18, 14 2, 22 2',
+  },
+  {
+    id: 'linear',
+    label: 'Linear',
+    shortLabel: 'Linear',
+    description: 'Constant uniform velocity from start to end',
+    svgPath: 'M 2 18 L 22 2',
+  },
+  {
+    id: 'spring',
+    label: 'Spring',
+    shortLabel: 'Spring',
+    description: 'Dynamic spring physics with subtle overshoot settle',
+    svgPath: 'M 2 18 C 6 1, 11 0, 15 4 C 18 6, 20 2, 22 2',
+  },
+  {
+    id: 'cubic-bezier',
+    label: 'Cubic Bezier (Studio)',
+    shortLabel: 'Cubic Bezier',
+    description: 'Cinema-grade S-curve for flagship hardware reveals',
+    svgPath: 'M 2 18 C 7 18, 9 2, 22 2',
+  },
+  {
+    id: 'custom-path',
+    label: 'Custom Path (Draw Cubic-Bezier)',
+    shortLabel: 'Custom Path',
+    description: 'Draw your own custom cubic-bezier(x1, y1, x2, y2) motion curve',
+    svgPath: 'M 2 18 C 5 2, 17 18, 22 2',
+  },
+];
+
+export const DEFAULT_CUSTOM_BEZIER: CustomBezierControlPoints = {
+  x1: 0.25,
+  y1: 0.85,
+  x2: 0.35,
+  y2: 1.0,
+};
+
+export const DEVICE_TRANSITION_PRESETS: DeviceTransitionPreset[] = [
+  // 1. SLIDE TRANSITIONS
+  {
+    id: 'slide-in',
+    name: 'Slide In',
+    shortLabel: 'Slide In',
+    category: 'Slide',
+    group: 'Entrances',
+    badge: 'Entrance',
+    description: 'Glides smoothly into place from the right stage edge with opacity ramp',
+    defaultDurationFrames: 30,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'left',
+  },
+  {
+    id: 'slide-in-left',
+    name: 'Slide In Left',
+    shortLabel: 'Slide Left',
+    category: 'Slide',
+    group: 'Entrances',
+    badge: 'Entrance',
+    description: 'Sweeps horizontally from the left margin into resting position',
+    defaultDurationFrames: 30,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'right',
+  },
+  {
+    id: 'slide-in-up',
+    name: 'Slide In Up',
+    shortLabel: 'Slide Up',
+    category: 'Slide',
+    group: 'Entrances',
+    badge: 'Entrance',
+    description: 'Rises upward from bottom of stage with crisp deceleration',
+    defaultDurationFrames: 30,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'up',
+  },
+  {
+    id: 'slide-in-down',
+    name: 'Slide In Down',
+    shortLabel: 'Slide Down',
+    category: 'Slide',
+    group: 'Entrances',
+    badge: 'Entrance',
+    description: 'Descends from the top edge into the hero composition',
+    defaultDurationFrames: 30,
+    defaultEasing: 'ease-out',
+    directionHint: 'down',
+  },
+  {
+    id: 'device-slide-in',
+    name: 'Diagonal Slide In',
+    shortLabel: 'Diagonal',
+    category: 'Slide',
+    group: 'Entrances',
+    badge: 'Entrance',
+    description: 'Glides in from stage bottom-right with subtle tilt & opacity ramp',
+    defaultDurationFrames: 35,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'left',
+  },
+  {
+    id: 'slide-out',
+    name: 'Slide Out',
+    shortLabel: 'Slide Out',
+    category: 'Slide',
+    group: 'Exits',
+    badge: 'Exit',
+    description: 'Accelerates out of frame to the right with clean opacity dissolve',
+    defaultDurationFrames: 28,
+    defaultEasing: 'ease-in',
+    directionHint: 'right',
+  },
+
+  // 2. FADE TRANSITIONS
+  {
+    id: 'fade',
+    name: 'Fade',
+    shortLabel: 'Fade',
+    category: 'Fade',
+    group: 'Entrances',
+    badge: 'Dissolve',
+    description: 'Smooth 0% to 100% opacity dissolve with ambient glow warm-up',
+    defaultDurationFrames: 30,
+    defaultEasing: 'ease-out',
+    directionHint: 'fade',
+  },
+  {
+    id: 'fade-up',
+    name: 'Fade & Rise',
+    shortLabel: 'Fade Up',
+    category: 'Fade',
+    group: 'Entrances',
+    badge: 'Editorial',
+    description: 'Soft opacity fade-in paired with a 75px vertical float upward',
+    defaultDurationFrames: 32,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'up',
+  },
+  {
+    id: 'fade-in-out',
+    name: 'Fade In & Out',
+    shortLabel: 'In & Out',
+    category: 'Fade',
+    group: 'Emphasis',
+    badge: 'Envelope',
+    description: '4-keyframe opacity envelope: fades in, holds, and fades out at end',
+    defaultDurationFrames: 45,
+    defaultEasing: 'ease-in-out',
+    directionHint: 'fade',
+  },
+  {
+    id: 'fade-out',
+    name: 'Fade Out',
+    shortLabel: 'Fade Out',
+    category: 'Fade',
+    group: 'Exits',
+    badge: 'Exit',
+    description: 'Smoothly dissolves device opacity from 100% to 0%',
+    defaultDurationFrames: 28,
+    defaultEasing: 'ease-in',
+    directionHint: 'fade',
+  },
+
+  // 3. ZOOM TRANSITIONS
+  {
+    id: 'zoom',
+    name: 'Zoom',
+    shortLabel: 'Zoom',
+    category: 'Zoom',
+    group: 'Entrances',
+    badge: 'Scale In',
+    description: 'Crisp scale reveal from 55% to 100% with cubic-bezier snap',
+    defaultDurationFrames: 30,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'in',
+  },
+  {
+    id: 'zoom-in',
+    name: 'Zoom In Hero',
+    shortLabel: 'Zoom Hero',
+    category: 'Zoom',
+    group: 'Entrances',
+    badge: 'Showcase',
+    description: 'Scales from 68% up to 118% showcase close-up then settles to 100%',
+    defaultDurationFrames: 45,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'in',
+  },
+  {
+    id: 'zoom-out',
+    name: 'Zoom Out Settle',
+    shortLabel: 'Zoom Out',
+    category: 'Zoom',
+    group: 'Entrances',
+    badge: 'Reveal',
+    description: 'Starts oversized at 142% and settles smoothly into 100% frame',
+    defaultDurationFrames: 34,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'out',
+  },
+  {
+    id: 'zoom-bounce',
+    name: 'Elastic Zoom Pop',
+    shortLabel: 'Zoom Pop',
+    category: 'Zoom',
+    group: 'Emphasis',
+    badge: 'Spring',
+    description: 'Overshoots to 112% with spring physics before locking into place',
+    defaultDurationFrames: 32,
+    defaultEasing: 'spring',
+    directionHint: 'in',
+  },
+  {
+    id: 'zoom-punch-out',
+    name: 'Zoom Portal Exit',
+    shortLabel: 'Zoom Exit',
+    category: 'Zoom',
+    group: 'Exits',
+    badge: 'Exit',
+    description: 'Punches scale forward to 155% while dissolving out',
+    defaultDurationFrames: 26,
+    defaultEasing: 'ease-in',
+    directionHint: 'out',
+  },
+
+  // 4. 3D PERSPECTIVE TRANSITIONS
+  {
+    id: 'flip-3d',
+    name: '3D Flip In',
+    shortLabel: '3D Flip',
+    category: '3D',
+    group: 'Entrances',
+    badge: '3D Yaw',
+    description: 'Rotates 3D Y-axis from -65° into hero perspective with scale ramp',
+    defaultDurationFrames: 36,
+    defaultEasing: 'cubic-bezier',
+    directionHint: '3d',
+  },
+  {
+    id: 'tilt-reveal-3d',
+    name: '3D Isometric Rise',
+    shortLabel: '3D Rise',
+    category: '3D',
+    group: 'Entrances',
+    badge: '3D Pitch',
+    description: 'Pitches up from a 38° flat deck angle into upright showcase posture',
+    defaultDurationFrames: 36,
+    defaultEasing: 'cubic-bezier',
+    directionHint: '3d',
+  },
+  {
+    id: 'rotation-reveal',
+    name: '3D Orbit Sweep',
+    shortLabel: '3D Sweep',
+    category: '3D',
+    group: 'Emphasis',
+    badge: '3D Orbit',
+    description: 'Sweeps 3D Yaw (-45° to +15°) and Pitch across the timeline',
+    defaultDurationFrames: 60,
+    defaultEasing: 'ease-in-out',
+    directionHint: '3d',
+  },
+  {
+    id: 'camera-push-in',
+    name: 'Cinematic Push-In',
+    shortLabel: 'Push-In',
+    category: '3D',
+    group: 'Emphasis',
+    badge: 'Camera',
+    description: 'Progressive scale and 3D pitch focus push toward viewer',
+    defaultDurationFrames: 60,
+    defaultEasing: 'cubic-bezier',
+    directionHint: 'in',
+  },
+
+  // 5. CONTINUOUS LOOP & GLOW PRESETS
+  {
+    id: 'smooth-scale',
+    name: 'Smooth Scale Pulse',
+    shortLabel: 'Scale Loop',
+    category: 'Loop',
+    group: 'Emphasis',
+    badge: 'Loop',
+    description: 'Breathing scale loop across the timeline',
+    defaultDurationFrames: 60,
+    defaultEasing: 'ease-in-out',
+    directionHint: 'loop',
+  },
+  {
+    id: 'floating-motion',
+    name: 'Zero-G Floating',
+    shortLabel: 'Float',
+    category: 'Loop',
+    group: 'Emphasis',
+    badge: 'Loop',
+    description: 'Gentle vertical levitation and 3D tilt cycle',
+    defaultDurationFrames: 60,
+    defaultEasing: 'ease-in-out',
+    directionHint: 'loop',
+  },
+  {
+    id: 'glow-pulse',
+    name: 'Keyframed Glow Surge',
+    shortLabel: 'Glow Surge',
+    category: 'Loop',
+    group: 'Emphasis',
+    badge: 'Neon',
+    description: 'Animates outer glow radius (24px -> 76px) and intensity',
+    defaultDurationFrames: 60,
+    defaultEasing: 'ease-in-out',
+    directionHint: 'loop',
+  },
+  {
+    id: 'neon-border-sweep',
+    name: 'Neon Perimeter Sweep',
+    shortLabel: 'Neon Sweep',
+    category: 'Loop',
+    group: 'Emphasis',
+    badge: 'Neon',
+    description: 'Activates travelling perimeter highlight & color shift',
+    defaultDurationFrames: 60,
+    defaultEasing: 'linear',
+    directionHint: 'loop',
+  },
+  {
+    id: 'spring-bounce',
+    name: 'Elastic Drop Bounce',
+    shortLabel: 'Drop Bounce',
+    category: 'Slide',
+    group: 'Emphasis',
+    badge: 'Spring',
+    description: 'High-energy spring-eased vertical drop and scale pop',
+    defaultDurationFrames: 34,
+    defaultEasing: 'spring',
+    directionHint: 'down',
+  },
+];
+
 export const ANIMATION_PRESETS: {
   id: AnimationPresetId;
   name: string;
   category: 'Transform' | 'Camera & 3D' | 'Glow & Neon';
   description: string;
-}[] = [
-  {
-    id: 'zoom-in',
-    name: 'Zoom In Hero',
-    category: 'Transform',
-    description: 'Smooth scale from 65% to 105% with cubic ease-out',
-  },
-  {
-    id: 'zoom-out',
-    name: 'Zoom Out Reveal',
-    category: 'Transform',
-    description: 'Starts close-up at 130% and settles to 90%',
-  },
-  {
-    id: 'smooth-scale',
-    name: 'Smooth Scale Pulse',
-    category: 'Transform',
-    description: '3-keyframe breathing scale loop',
-  },
-  {
-    id: 'device-slide-in',
-    name: 'Device Slide In',
-    category: 'Transform',
-    description: 'Glides in from stage bottom-right with opacity ramp',
-  },
-  {
-    id: 'fade-in-out',
-    name: 'Fade In & Fade Out',
-    category: 'Transform',
-    description: '4-keyframe opacity envelope across timeline',
-  },
-  {
-    id: 'rotation-reveal',
-    name: '3D Rotation Reveal',
-    category: 'Camera & 3D',
-    description: 'Sweeps 3D Yaw (-45° to 15°) and Pitch with perspective',
-  },
-  {
-    id: 'floating-motion',
-    name: 'Zero-G Floating',
-    category: 'Camera & 3D',
-    description: 'Gentle vertical levitation and 3D tilt cycle',
-  },
-  {
-    id: 'camera-push-in',
-    name: 'Cinematic Push-In',
-    category: 'Camera & 3D',
-    description: 'Progressive scale and 3D pitch focus push',
-  },
-  {
-    id: 'glow-pulse',
-    name: 'Keyframed Glow Surge',
-    category: 'Glow & Neon',
-    description: 'Animates outer glow radius (24px -> 76px) and intensity',
-  },
-  {
-    id: 'neon-border-sweep',
-    name: 'Neon Perimeter Sweep',
-    category: 'Glow & Neon',
-    description: 'Activates travelling perimeter highlight & color shift',
-  },
-  {
-    id: 'spring-bounce',
-    name: 'Elastic Spring Pop',
-    category: 'Transform',
-    description: 'High-energy spring-eased scale and Y drop',
-  },
-];
+}[] = DEVICE_TRANSITION_PRESETS.map((p) => ({
+  id: p.id,
+  name: p.name,
+  category:
+    p.category === '3D'
+      ? 'Camera & 3D'
+      : p.id === 'glow-pulse' || p.id === 'neon-border-sweep'
+        ? 'Glow & Neon'
+        : 'Transform',
+  description: p.description,
+}));
 
 export const DEVICE_CATALOG: DevicePreset[] = [
   // 1. iPhone devices
@@ -661,6 +1008,8 @@ export const DEFAULT_OBJECT_EFFECTS: ObjectEffects = {
   blur: 0,
   entranceAnimation: 'none',
   exitAnimation: 'none',
+  customBezierPoints: { x1: 0.25, y1: 0.85, x2: 0.35, y2: 1.0 },
+  loopTransition: false,
   effectStackOrder: 'shadow-glow-frame',
 };
 

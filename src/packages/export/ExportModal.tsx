@@ -23,6 +23,7 @@ export const ExportModal: React.FC = () => {
     aspectRatio,
     devices,
     drawings,
+    webcams,
     clips,
     tracks,
     mediaAssets,
@@ -75,6 +76,7 @@ export const ExportModal: React.FC = () => {
         durationInFrames,
         devices,
         drawings,
+        webcams,
         clips,
         tracks,
         mediaAssets,
@@ -130,19 +132,19 @@ export const ExportModal: React.FC = () => {
       role="dialog"
       aria-modal="true"
       aria-labelledby="export-modal-title"
-      className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4"
     >
-      <div className="w-full max-w-2xl bg-[#0E131D] border border-slate-800 rounded-xl shadow-2xl overflow-hidden flex flex-col">
+      <div className="w-full max-w-2xl bg-white border border-slate-200 rounded-xl shadow-xl overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-[#111724]">
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
           <div>
             <h2
               id="export-modal-title"
-              className="text-base font-semibold text-slate-100"
+              className="text-base font-semibold text-slate-900"
             >
               Export Studio Composition
             </h2>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className="text-xs text-slate-500 mt-0.5">
               Deterministic frame-by-frame compositor · MP4, WebM, GIF, PNG,
               JPG, WebP & SVG
             </p>
@@ -151,7 +153,7 @@ export const ExportModal: React.FC = () => {
             type="button"
             onClick={handleCancel}
             aria-label="Close export modal"
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+            className="p-1.5 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-200/70"
           >
             <X className="w-4 h-4" />
           </button>
@@ -161,7 +163,7 @@ export const ExportModal: React.FC = () => {
         <div className="p-6 space-y-5 overflow-y-auto max-h-[75vh]">
           {/* Format Grid */}
           <div>
-            <label className="block text-xs font-medium text-slate-300 mb-2">
+            <label className="block text-xs font-medium text-slate-700 mb-2">
               Output Format
             </label>
             <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
@@ -187,8 +189,8 @@ export const ExportModal: React.FC = () => {
                   }
                   className={`py-2 px-2.5 rounded-lg border text-xs font-mono font-semibold flex flex-col items-center gap-1 transition-colors ${
                     settings.format === fmt.id
-                      ? 'bg-sky-500/15 border-sky-400 text-sky-300'
-                      : 'bg-[#090C12] border-slate-800 text-slate-400 hover:border-slate-700'
+                      ? 'bg-blue-50 border-blue-500 text-blue-700 ring-1 ring-blue-500/20'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-100'
                   }`}
                 >
                   {fmt.type === 'video' ? (
@@ -205,7 +207,7 @@ export const ExportModal: React.FC = () => {
           {/* Resolution, Aspect Ratio & FPS */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">
                 Resolution Preset
               </label>
               <select
@@ -217,7 +219,7 @@ export const ExportModal: React.FC = () => {
                     resolution: e.target.value as ExportSettings['resolution'],
                   }))
                 }
-                className="w-full bg-[#090C12] border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200"
+                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800"
               >
                 <option value="720p">720p HD</option>
                 <option value="1080p">1080p Full HD</option>
@@ -226,7 +228,7 @@ export const ExportModal: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">
                 Aspect Ratio
               </label>
               <select
@@ -238,7 +240,7 @@ export const ExportModal: React.FC = () => {
                     aspectRatio: e.target.value as AspectRatioPreset,
                   }))
                 }
-                className="w-full bg-[#090C12] border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200"
+                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-800"
               >
                 <option value="16:9">16:9 Widescreen</option>
                 <option value="9:16">9:16 Vertical</option>
@@ -249,7 +251,7 @@ export const ExportModal: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1.5">
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">
                 Frame Rate
               </label>
               <select
@@ -261,7 +263,7 @@ export const ExportModal: React.FC = () => {
                     fps: Number(e.target.value) as 24 | 30 | 60,
                   }))
                 }
-                className="w-full bg-[#090C12] border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono tabular-nums text-slate-200"
+                className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono tabular-nums text-slate-800"
               >
                 <option value={24}>24 FPS (Cinema)</option>
                 <option value={30}>30 FPS (Broadcast)</option>
@@ -271,8 +273,8 @@ export const ExportModal: React.FC = () => {
           </div>
 
           {/* Transparency & Quality */}
-          <div className="flex flex-wrap items-center justify-between gap-4 p-3.5 rounded-lg bg-[#090C12] border border-slate-800">
-            <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer">
+          <div className="flex flex-wrap items-center justify-between gap-4 p-3.5 rounded-lg bg-slate-50 border border-slate-200">
+            <label className="flex items-center gap-2.5 text-xs text-slate-700 cursor-pointer">
               <input
                 type="checkbox"
                 checked={settings.transparentBackground}
@@ -282,39 +284,39 @@ export const ExportModal: React.FC = () => {
                     transparentBackground: e.target.checked,
                   }))
                 }
-                className="rounded border-slate-700 bg-slate-900 text-sky-400 focus:ring-sky-500"
+                className="rounded border-slate-300 bg-white text-blue-600 focus:ring-blue-500"
               />
               <span>Transparent Background (PNG / WebP / WebM Alpha)</span>
             </label>
 
-            <div className="text-xs font-mono tabular-nums text-sky-400">
+            <div className="text-xs font-mono tabular-nums text-blue-600 font-semibold">
               Output: {width} × {height} px
             </div>
           </div>
 
           {/* Remotion / FFmpeg CLI Command Preview */}
-          <div className="p-3.5 rounded-lg bg-[#090C12] border border-slate-800/80 space-y-1.5">
-            <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
-              <Terminal className="w-3.5 h-3.5 text-sky-400" />
+          <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-600">
+              <Terminal className="w-3.5 h-3.5 text-blue-600" />
               <span>Desktop FFmpeg / Remotion Pipeline Command</span>
             </div>
-            <pre className="text-[11px] font-mono text-slate-300 overflow-x-auto whitespace-pre-wrap break-all">
+            <pre className="text-[11px] font-mono text-slate-700 overflow-x-auto whitespace-pre-wrap break-all">
               {ffmpegCommand}
             </pre>
           </div>
 
           {/* Progress Bar */}
           {(isExporting || statusText) && (
-            <div className="space-y-2 p-3.5 rounded-lg bg-[#111724] border border-slate-800">
+            <div className="space-y-2 p-3.5 rounded-lg bg-slate-50 border border-slate-200">
               <div className="flex items-center justify-between text-xs">
-                <span className="text-slate-200 font-medium">{statusText}</span>
-                <span className="font-mono tabular-nums text-sky-400">
+                <span className="text-slate-800 font-medium">{statusText}</span>
+                <span className="font-mono tabular-nums text-blue-600 font-semibold">
                   {progress}%
                 </span>
               </div>
-              <div className="h-2 w-full bg-slate-900 rounded-full overflow-hidden">
+              <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-sky-400 transition-all duration-150"
+                  className="h-full bg-blue-600 transition-all duration-150"
                   style={{ width: `${progress}%` }}
                 />
               </div>
@@ -322,18 +324,18 @@ export const ExportModal: React.FC = () => {
           )}
 
           {errorText && (
-            <div className="p-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">
+            <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700">
               {errorText}
             </div>
           )}
 
           {resultDownload && (
-            <div className="p-3.5 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-2.5 text-xs text-emerald-300">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <div className="p-3.5 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2.5 text-xs text-emerald-800">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
                 <div>
                   <div className="font-semibold">{resultDownload.filename}</div>
-                  <div className="text-[11px] text-emerald-400/80 font-mono">
+                  <div className="text-[11px] text-emerald-700 font-mono">
                     {resultDownload.sizeKb} KB · Ready for download
                   </div>
                 </div>
@@ -341,7 +343,7 @@ export const ExportModal: React.FC = () => {
               <a
                 href={resultDownload.url}
                 download={resultDownload.filename}
-                className="px-3 py-1.5 bg-emerald-400 hover:bg-emerald-300 text-slate-950 font-semibold text-xs rounded-md flex items-center gap-1.5 whitespace-nowrap"
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-md flex items-center gap-1.5 whitespace-nowrap shadow-xs"
               >
                 <Download className="w-3.5 h-3.5" />
                 Save File
@@ -351,11 +353,11 @@ export const ExportModal: React.FC = () => {
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-slate-800 bg-[#111724] flex items-center justify-end gap-3">
+        <div className="px-6 py-4 border-t border-slate-200 bg-slate-50 flex items-center justify-end gap-3">
           <button
             type="button"
             onClick={handleCancel}
-            className="px-4 py-2 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+            className="px-4 py-2 rounded-lg text-xs font-medium text-slate-600 hover:text-slate-900 hover:bg-slate-200/70 transition-colors"
           >
             {isExporting ? 'Cancel Render' : 'Close'}
           </button>
@@ -363,7 +365,7 @@ export const ExportModal: React.FC = () => {
             type="button"
             disabled={isExporting}
             onClick={handleStartExport}
-            className="px-5 py-2 rounded-lg text-xs font-semibold bg-sky-400 hover:bg-sky-300 disabled:opacity-50 text-slate-950 flex items-center gap-1.5 transition-colors"
+            className="px-5 py-2 rounded-lg text-xs font-semibold bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white flex items-center gap-1.5 transition-colors shadow-xs"
           >
             <Download className="w-3.5 h-3.5" />
             <span>{isExporting ? 'Rendering...' : 'Render & Download'}</span>

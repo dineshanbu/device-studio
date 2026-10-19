@@ -6,6 +6,7 @@ import {
   Eraser,
   Hexagon,
   Maximize2,
+  MessageSquare,
   Minus,
   MousePointer,
   Move,
@@ -16,6 +17,7 @@ import {
   Spline,
   Square,
   Trash2,
+  Type,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
@@ -25,10 +27,16 @@ import {
   resizeDrawingGeometry,
   resolveDeviceAtFrame,
   resolveDrawingAtFrame,
+  resolveWebcamAtFrame,
   updateDrawingLineEndpoints,
 } from '../scene-engine/math.ts';
 import { useStudioStore } from '../scene-engine/store.ts';
-import type { DrawingToolType, SceneDrawingObject } from '../shared/types.ts';
+import type {
+  DrawableToolType,
+  DrawingToolType,
+  SceneDrawingObject,
+  SceneWebcamOverlay,
+} from '../shared/types.ts';
 import { renderSceneFrame2D } from './renderFrame2D.ts';
 
 type DrawingResizeHandle = 'nw' | 'ne' | 'se' | 'sw' | 'n' | 'e' | 's' | 'w';
@@ -48,6 +56,35 @@ type InteractionMode =
       startMouseX: number;
       startMouseY: number;
       initialPositions: Record<string, { x: number; y: number }>;
+    }
+  | {
+      type: 'drag-webcam';
+      webcamId: string;
+      startMouseX: number;
+      startMouseY: number;
+      startX: number;
+      startY: number;
+    }
+  | {
+      type: 'resize-webcam';
+      webcamId: string;
+      handle: DrawingResizeHandle;
+      startMouseX: number;
+      startMouseY: number;
+      origWebcam: SceneWebcamOverlay;
+    }
+  | {
+      type: 'rotate-webcam';
+      webcamId: string;
+      centerX: number;
+      centerY: number;
+      startAngle: number;
+      initialRotation: number;
+    }
+  | {
+      type: 'drag-webcam-bezier-point';
+      webcamId: string;
+      pointIndex: number;
     }
   | {
       type: 'drag-drawing';
@@ -99,7 +136,7 @@ type InteractionMode =
     }
   | {
       type: 'creating-drawing';
-      tool: Exclude<DrawingToolType, 'select' | 'eraser'>;
+      tool: DrawableToolType;
       startX: number;
       startY: number;
       currentX: number;
@@ -116,12 +153,14 @@ export const Canvas2DEditor: React.FC = () => {
     canvasHeight,
     devices,
     drawings,
+    webcams,
     clips,
     tracks,
     mediaAssets,
     background,
     selectedIds,
     selectedDrawingId,
+    selectedWebcamId,
     activeDrawingTool,
     drawingDefaults,
     currentFrame,
@@ -137,11 +176,14 @@ export const Canvas2DEditor: React.FC = () => {
     showMotionTrail,
     selectDevice,
     selectDrawing,
+    selectWebcam,
     updateDevice,
     updateDrawing,
+    updateWebcam,
     addDrawing,
     deleteDrawing,
     duplicateDrawing,
+    deleteWebcam,
     deleteSelectedDevices,
     setActiveDrawingTool,
     setCurrentFrame,
@@ -188,6 +230,7 @@ export const Canvas2DEditor: React.FC = () => {
           return;
         }
         selectDrawing(null);
+        selectWebcam(null);
         selectDevice(null);
         return;
       }
@@ -196,6 +239,11 @@ export const Canvas2DEditor: React.FC = () => {
         if (selectedDrawingId) {
           e.preventDefault();
           deleteDrawing(selectedDrawingId);
+          return;
+        }
+        if (selectedWebcamId) {
+          e.preventDefault();
+          deleteWebcam(selectedWebcamId);
           return;
         }
         if (selectedIds.length > 0) {
@@ -226,11 +274,14 @@ export const Canvas2DEditor: React.FC = () => {
     interaction.type,
     activeDrawingTool,
     selectedDrawingId,
+    selectedWebcamId,
     selectedIds,
     setActiveDrawingTool,
     selectDrawing,
+    selectWebcam,
     selectDevice,
     deleteDrawing,
+    deleteWebcam,
     deleteSelectedDevices,
   ]);
 
@@ -333,6 +384,7 @@ export const Canvas2DEditor: React.FC = () => {
             durationInFrames,
             devices,
             drawings: previewDrawings,
+            webcams,
             clips,
             tracks,
             mediaAssets,
@@ -620,6 +672,141 @@ export const Canvas2DEditor: React.FC = () => {
             ctx.restore();
           }
 
+          // Draw Selection Bounding Box, 8 Resize Handles, Rotation Handle & Bezier Curve Handles for Selected Webcam Overlay
+          if (selectedWebcamId) {
+            const rawSelWc = webcams.find((w) => w.id === selectedWebcamId);
+            if (rawSelWc && rawSelWc.visible) {
+              const wcTrack = tracks.find((t) => t.targetId === rawSelWc.id);
+              const selWc = resolveWebcamAtFrame(
+                rawSelWc,
+                wcTrack ? wcTrack.keyframes : [],
+                currentFrame
+              );
+              ctx.save();
+              ctx.translate(selWc.x, selWc.y);
+              ctx.rotate((selWc.rotation * Math.PI) / 180);
+              const bw = selWc.width * selWc.scaleX;
+              const bh = selWc.height * selWc.scaleY;
+              const halfW = bw / 2;
+              const halfH = bh / 2;
+              const pad = 6;
+
+              ctx.strokeStyle = '#38BDF8';
+              ctx.lineWidth = Math.max(1.8, 2 / zoom);
+              ctx.setLineDash([6 / zoom, 4 / zoom]);
+              ctx.strokeRect(-halfW - pad, -halfH - pad, bw + pad * 2, bh + pad * 2);
+              ctx.setLineDash([]);
+
+              // Rotation stem & handle at top center
+              const rotHandleY = -halfH - pad - 28 / zoom;
+              ctx.beginPath();
+              ctx.moveTo(0, -halfH - pad);
+              ctx.lineTo(0, rotHandleY);
+              ctx.stroke();
+
+              ctx.fillStyle = '#0F172A';
+              ctx.beginPath();
+              ctx.arc(0, rotHandleY, 7.5 / zoom, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+
+              // 4 Corner resize handles (NW, NE, SE, SW)
+              const cornerHandles: [number, number][] = [
+                [-halfW - pad, -halfH - pad],
+                [halfW + pad, -halfH - pad],
+                [halfW + pad, halfH + pad],
+                [-halfW - pad, halfH + pad],
+              ];
+              const hs = 10 / zoom;
+              for (const [cx, cy] of cornerHandles) {
+                ctx.fillStyle = '#F8FAFC';
+                ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
+                ctx.strokeRect(cx - hs / 2, cy - hs / 2, hs, hs);
+              }
+
+              // 4 Side resize handles (N, E, S, W)
+              const sideHandles: [number, number, number, number][] = [
+                [0, -halfH - pad, 14 / zoom, 7 / zoom],
+                [halfW + pad, 0, 7 / zoom, 14 / zoom],
+                [0, halfH + pad, 14 / zoom, 7 / zoom],
+                [-halfW - pad, 0, 7 / zoom, 14 / zoom],
+              ];
+              for (const [sx, sy, sw, sh] of sideHandles) {
+                ctx.fillStyle = '#38BDF8';
+                ctx.fillRect(sx - sw / 2, sy - sh / 2, sw, sh);
+                ctx.strokeStyle = '#0F172A';
+                ctx.strokeRect(sx - sw / 2, sy - sh / 2, sw, sh);
+              }
+
+              // Interactive Bezier curve control handles for curved/custom shapes
+              if (
+                (selWc.shape === 'custom-bezier' ||
+                  selWc.shape === 'curved-asymmetric' ||
+                  selWc.shape === 'organic-blob') &&
+                selWc.bezierPoints &&
+                selWc.bezierPoints.length >= 3
+              ) {
+                ctx.save();
+                ctx.strokeStyle = 'rgba(245, 158, 11, 0.7)';
+                ctx.lineWidth = 1.5 / zoom;
+                ctx.setLineDash([4 / zoom, 3 / zoom]);
+                ctx.beginPath();
+                selWc.bezierPoints.forEach((bp, idx) => {
+                  const px = bp.x * halfW;
+                  const py = bp.y * halfH;
+                  if (idx === 0) ctx.moveTo(px, py);
+                  else ctx.lineTo(px, py);
+                });
+                ctx.closePath();
+                ctx.stroke();
+                ctx.setLineDash([]);
+
+                selWc.bezierPoints.forEach((bp, idx) => {
+                  const px = bp.x * halfW;
+                  const py = bp.y * halfH;
+                  ctx.beginPath();
+                  ctx.arc(px, py, 7 / zoom, 0, Math.PI * 2);
+                  ctx.fillStyle = '#F59E0B';
+                  ctx.fill();
+                  ctx.lineWidth = 2 / zoom;
+                  ctx.strokeStyle = '#FFFFFF';
+                  ctx.stroke();
+
+                  // Control point index label
+                  ctx.fillStyle = '#090D16';
+                  ctx.font = `700 ${Math.max(8, Math.round(9 / zoom))}px "JetBrains Mono", monospace`;
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  ctx.fillText(String(idx + 1), px, py);
+                });
+                ctx.restore();
+              }
+
+              // Dimension & Shape readout badge below selected webcam
+              const dimText = `${selWc.shape.toUpperCase()} · ${Math.round(bw)} × ${Math.round(bh)} px · ${Math.round(selWc.rotation)}°`;
+              const fontSize = Math.max(10, Math.round(11 / zoom));
+              ctx.font = `600 ${fontSize}px "JetBrains Mono", monospace`;
+              const textW = ctx.measureText(dimText).width;
+              const pillW = textW + 14 / zoom;
+              const pillH = 20 / zoom;
+              const pillX = -pillW / 2;
+              const pillY = halfH + pad + 10 / zoom;
+              ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
+              ctx.strokeStyle = '#38BDF8';
+              ctx.lineWidth = 1.2 / zoom;
+              ctx.beginPath();
+              ctx.roundRect(pillX, pillY, pillW, pillH, 5 / zoom);
+              ctx.fill();
+              ctx.stroke();
+              ctx.fillStyle = '#E2E8F0';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(dimText, 0, pillY + pillH / 2);
+
+              ctx.restore();
+            }
+          }
+
           // Draw Selection Bounding Box, 8 Resize Handles (Corners + Sides), Rotation Handle & Endpoint Handles for Selected Drawing Object
           if (selectedDrawingId) {
             const rawSelDr = drawings.find((d) => d.id === selectedDrawingId);
@@ -749,12 +936,14 @@ export const Canvas2DEditor: React.FC = () => {
     canvasHeight,
     devices,
     drawings,
+    webcams,
     clips,
     tracks,
     mediaAssets,
     background,
     selectedIds,
     selectedDrawingId,
+    selectedWebcamId,
     drawingDefaults,
     interaction,
     currentFrame,
@@ -792,7 +981,7 @@ export const Canvas2DEditor: React.FC = () => {
       // Ignore if synthetic event lacks pointerId registration
     }
 
-    if (e.button === 1 || e.altKey) {
+    if (e.button === 1 || e.altKey || activeDrawingTool === 'pan') {
       setInteraction({
         type: 'pan',
         startMouseX: e.clientX,
@@ -824,8 +1013,12 @@ export const Canvas2DEditor: React.FC = () => {
       return;
     }
 
-    // 2. Active Drawing Creation Tool (Brush, Pen, Line, Arrow, Rect, Rounded-Rect, Circle, Ellipse, Polygon, Bezier)
-    if (activeDrawingTool !== 'select') {
+    // 2. Active Drawing Creation Tool
+    if (
+      activeDrawingTool !== 'select' &&
+      activeDrawingTool !== 'multi-select' &&
+      activeDrawingTool !== 'transform'
+    ) {
       setInteraction({
         type: 'creating-drawing',
         tool: activeDrawingTool,
@@ -961,6 +1154,91 @@ export const Canvas2DEditor: React.FC = () => {
       }
     }
 
+    // 2.9. Check if clicking on a selected webcam overlay's Bezier control points, rotation handle, or 8 resize handles
+    if (selectedWebcamId) {
+      const rawSelWc = webcams.find((w) => w.id === selectedWebcamId);
+      if (rawSelWc && !rawSelWc.locked && rawSelWc.visible) {
+        const wcTrack = tracks.find((t) => t.targetId === rawSelWc.id);
+        const selWc = resolveWebcamAtFrame(
+          rawSelWc,
+          wcTrack ? wcTrack.keyframes : [],
+          currentFrame
+        );
+        const dx = pt.x - selWc.x;
+        const dy = pt.y - selWc.y;
+        const rad = (-selWc.rotation * Math.PI) / 180;
+        const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+        const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+        const halfW = (selWc.width * selWc.scaleX) / 2;
+        const halfH = (selWc.height * selWc.scaleY) / 2;
+        const pad = 6;
+        const hitRadius = Math.max(14, 22 / zoom);
+
+        // Bezier curve control points hit test
+        if (
+          (selWc.shape === 'custom-bezier' ||
+            selWc.shape === 'curved-asymmetric' ||
+            selWc.shape === 'organic-blob') &&
+          selWc.bezierPoints &&
+          selWc.bezierPoints.length >= 3
+        ) {
+          for (let i = 0; i < selWc.bezierPoints.length; i++) {
+            const bp = selWc.bezierPoints[i];
+            const px = bp.x * halfW;
+            const py = bp.y * halfH;
+            if (Math.hypot(localX - px, localY - py) <= hitRadius) {
+              setInteraction({
+                type: 'drag-webcam-bezier-point',
+                webcamId: selWc.id,
+                pointIndex: i,
+              });
+              return;
+            }
+          }
+        }
+
+        // Rotation handle at top center
+        const rotHandleY = -halfH - pad - 28 / zoom;
+        if (Math.hypot(localX, localY - rotHandleY) <= hitRadius) {
+          const angle = Math.atan2(pt.y - selWc.y, pt.x - selWc.x);
+          setInteraction({
+            type: 'rotate-webcam',
+            webcamId: selWc.id,
+            centerX: selWc.x,
+            centerY: selWc.y,
+            startAngle: angle,
+            initialRotation: selWc.rotation,
+          });
+          return;
+        }
+
+        // 8 Resize Handles (4 corners + 4 sides)
+        const handles: { id: DrawingResizeHandle; x: number; y: number }[] = [
+          { id: 'nw', x: -halfW - pad, y: -halfH - pad },
+          { id: 'ne', x: halfW + pad, y: -halfH - pad },
+          { id: 'se', x: halfW + pad, y: halfH + pad },
+          { id: 'sw', x: -halfW - pad, y: halfH + pad },
+          { id: 'n', x: 0, y: -halfH - pad },
+          { id: 'e', x: halfW + pad, y: 0 },
+          { id: 's', x: 0, y: halfH + pad },
+          { id: 'w', x: -halfW - pad, y: 0 },
+        ];
+        for (const h of handles) {
+          if (Math.hypot(localX - h.x, localY - h.y) <= hitRadius) {
+            setInteraction({
+              type: 'resize-webcam',
+              webcamId: selWc.id,
+              handle: h.id,
+              startMouseX: pt.x,
+              startMouseY: pt.y,
+              origWebcam: JSON.parse(JSON.stringify(rawSelWc)),
+            });
+            return;
+          }
+        }
+      }
+    }
+
     // 3. Check if clicking on a selected device's rotation or corner scale handle
     const primarySelectedId = selectedIds[0];
     if (primarySelectedId) {
@@ -1049,6 +1327,40 @@ export const Canvas2DEditor: React.FC = () => {
       }
     }
 
+    // 4.5. Hit-test Webcam Overlays (above-devices first, then devices, then below-devices)
+    const sortedWebcams = [...webcams]
+      .filter((w) => w.visible && !w.locked)
+      .sort((a, b) => b.zIndex - a.zIndex);
+
+    for (const rawWc of sortedWebcams) {
+      if (rawWc.layerPosition === 'below-devices') continue;
+      const wcTrack = tracks.find((t) => t.targetId === rawWc.id);
+      const wc = resolveWebcamAtFrame(
+        rawWc,
+        wcTrack ? wcTrack.keyframes : [],
+        currentFrame
+      );
+      const dx = pt.x - wc.x;
+      const dy = pt.y - wc.y;
+      const rad = (-wc.rotation * Math.PI) / 180;
+      const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+      const halfW = (wc.width * wc.scaleX) / 2;
+      const halfH = (wc.height * wc.scaleY) / 2;
+      if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        selectWebcam(wc.id);
+        setInteraction({
+          type: 'drag-webcam',
+          webcamId: wc.id,
+          startMouseX: pt.x,
+          startMouseY: pt.y,
+          startX: wc.x,
+          startY: wc.y,
+        });
+        return;
+      }
+    }
+
     // 5. Hit-test devices from top zIndex to bottom
     const sorted = [...devices]
       .filter((d) => d.visible && !d.locked)
@@ -1097,9 +1409,40 @@ export const Canvas2DEditor: React.FC = () => {
       }
     }
 
+    // 5.5. Hit-test Webcam Overlays configured to sit below devices
+    for (const rawWc of sortedWebcams) {
+      if (rawWc.layerPosition !== 'below-devices') continue;
+      const wcTrack = tracks.find((t) => t.targetId === rawWc.id);
+      const wc = resolveWebcamAtFrame(
+        rawWc,
+        wcTrack ? wcTrack.keyframes : [],
+        currentFrame
+      );
+      const dx = pt.x - wc.x;
+      const dy = pt.y - wc.y;
+      const rad = (-wc.rotation * Math.PI) / 180;
+      const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+      const halfW = (wc.width * wc.scaleX) / 2;
+      const halfH = (wc.height * wc.scaleY) / 2;
+      if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        selectWebcam(wc.id);
+        setInteraction({
+          type: 'drag-webcam',
+          webcamId: wc.id,
+          startMouseX: pt.x,
+          startMouseY: pt.y,
+          startX: wc.x,
+          startY: wc.y,
+        });
+        return;
+      }
+    }
+
     // Clicked empty canvas space
     selectDevice(null);
     selectDrawing(null);
+    selectWebcam(null);
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1148,6 +1491,117 @@ export const Canvas2DEditor: React.FC = () => {
         interaction.startPanX + dx,
         interaction.startPanY + dy
       );
+      return;
+    }
+
+    if (interaction.type === 'drag-webcam') {
+      const dx = pt.x - interaction.startMouseX;
+      const dy = pt.y - interaction.startMouseY;
+      const otherCenters = devices
+        .filter((d) => d.visible)
+        .map((d) => ({ x: d.x, y: d.y }));
+      const snapped = computeSnapPosition(
+        interaction.startX + dx,
+        interaction.startY + dy,
+        canvasWidth,
+        canvasHeight,
+        otherCenters,
+        snapToGrid,
+        20,
+        10
+      );
+      setActiveGuides({ x: snapped.guidesX, y: snapped.guidesY });
+      updateWebcam(
+        interaction.webcamId,
+        {
+          x: Math.round(snapped.x),
+          y: Math.round(snapped.y),
+        },
+        false
+      );
+      return;
+    }
+
+    if (interaction.type === 'resize-webcam') {
+      const orig = interaction.origWebcam;
+      const rad = (-orig.rotation * Math.PI) / 180;
+      const rawDx = pt.x - interaction.startMouseX;
+      const rawDy = pt.y - interaction.startMouseY;
+      const localDx = rawDx * Math.cos(rad) - rawDy * Math.sin(rad);
+      const localDy = rawDx * Math.sin(rad) + rawDy * Math.cos(rad);
+      const h = interaction.handle;
+
+      let nextW = orig.width;
+      let nextH = orig.height;
+
+      if (h === 'e' || h === 'ne' || h === 'se') {
+        nextW = Math.max(80, Math.round(orig.width + localDx * 2));
+      } else if (h === 'w' || h === 'nw' || h === 'sw') {
+        nextW = Math.max(80, Math.round(orig.width - localDx * 2));
+      }
+
+      if (h === 's' || h === 'se' || h === 'sw') {
+        nextH = Math.max(80, Math.round(orig.height + localDy * 2));
+      } else if (h === 'n' || h === 'ne' || h === 'nw') {
+        nextH = Math.max(80, Math.round(orig.height - localDy * 2));
+      }
+
+      const lockAspect =
+        Boolean(orig.lockAspectRatio) ||
+        orig.shape === 'circle' ||
+        orig.shape === 'square' ||
+        e.shiftKey;
+
+      if (lockAspect) {
+        const aspect = Math.max(0.25, orig.width / Math.max(1, orig.height));
+        if (h === 'n' || h === 's') {
+          nextW = Math.max(80, Math.round(nextH * aspect));
+        } else {
+          nextH = Math.max(80, Math.round(nextW / aspect));
+        }
+      }
+
+      updateWebcam(
+        interaction.webcamId,
+        {
+          width: nextW,
+          height: nextH,
+        },
+        false
+      );
+      return;
+    }
+
+    if (interaction.type === 'rotate-webcam') {
+      const angle = Math.atan2(
+        pt.y - interaction.centerY,
+        pt.x - interaction.centerX
+      );
+      const degDelta = ((angle - interaction.startAngle) * 180) / Math.PI;
+      let nextRot = Math.round(interaction.initialRotation + degDelta);
+      if ((snapToGrid || e.shiftKey) && Math.abs(nextRot % 15) <= 4) {
+        nextRot = Math.round(nextRot / 15) * 15;
+      }
+      updateWebcam(interaction.webcamId, { rotation: nextRot }, false);
+      return;
+    }
+
+    if (interaction.type === 'drag-webcam-bezier-point') {
+      const rawWc = webcams.find((w) => w.id === interaction.webcamId);
+      if (!rawWc || !rawWc.bezierPoints) return;
+      const dx = pt.x - rawWc.x;
+      const dy = pt.y - rawWc.y;
+      const rad = (-rawWc.rotation * Math.PI) / 180;
+      const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+      const halfW = Math.max(20, (rawWc.width * rawWc.scaleX) / 2);
+      const halfH = Math.max(20, (rawWc.height * rawWc.scaleY) / 2);
+      const normX = Math.max(-1.4, Math.min(1.4, Number((localX / halfW).toFixed(3))));
+      const normY = Math.max(-1.4, Math.min(1.4, Number((localY / halfH).toFixed(3))));
+      const nextPoints = rawWc.bezierPoints.map((bp, idx) =>
+        idx === interaction.pointIndex ? { x: normX, y: normY } : bp
+      );
+      updateWebcam(interaction.webcamId, { bezierPoints: nextPoints }, false);
       return;
     }
 
@@ -1318,28 +1772,31 @@ export const Canvas2DEditor: React.FC = () => {
     }
 
     if (interaction.type === 'creating-drawing') {
-      const xs =
+      const isFreehandTool =
         interaction.tool === 'brush' ||
         interaction.tool === 'pen' ||
-        interaction.tool === 'bezier'
-          ? interaction.points.map((p) => p.x)
-          : [interaction.startX, interaction.currentX];
-      const ys =
-        interaction.tool === 'brush' ||
-        interaction.tool === 'pen' ||
-        interaction.tool === 'bezier'
-          ? interaction.points.map((p) => p.y)
-          : [interaction.startY, interaction.currentY];
+        interaction.tool === 'bezier' ||
+        interaction.tool === 'freehand' ||
+        interaction.tool === 'highlight-stroke' ||
+        interaction.tool === 'neon-path' ||
+        interaction.tool === 'animated-stroke';
+
+      const xs = isFreehandTool
+        ? interaction.points.map((p) => p.x)
+        : [interaction.startX, interaction.currentX];
+      const ys = isFreehandTool
+        ? interaction.points.map((p) => p.y)
+        : [interaction.startY, interaction.currentY];
 
       const minX = Math.min(...xs);
       const maxX = Math.max(...xs);
       const minY = Math.min(...ys);
       const maxY = Math.max(...ys);
 
-      // Default comfortable size (160x160) if user just clicked once on the canvas
       const rawW = maxX - minX;
       const rawH = maxY - minY;
-      const isCircle = interaction.tool === 'circle';
+      const isCircle =
+        interaction.tool === 'circle' || interaction.tool === 'pulse-ring';
       const baseW = Math.max(120, rawW);
       const baseH = Math.max(120, rawH);
       const w = isCircle ? Math.max(baseW, baseH) : baseW;
@@ -1353,32 +1810,34 @@ export const Canvas2DEditor: React.FC = () => {
 
       const newDrawing: SceneDrawingObject = {
         id,
-        name: `Neon ${toolLabel} #${drawings.length + 1}`,
+        name: `${toolLabel} #${drawings.length + 1}`,
         tool: interaction.tool,
-        points:
-          interaction.tool === 'brush' ||
-          interaction.tool === 'pen' ||
-          interaction.tool === 'bezier'
-            ? interaction.points.length >= 2 && (rawW >= 15 || rawH >= 15)
-              ? interaction.points.map((p) => ({
-                  x: Math.round(p.x - cx),
-                  y: Math.round(p.y - cy),
-                }))
-              : [
-                  { x: -80, y: 40 },
-                  { x: 0, y: -40 },
-                  { x: 80, y: 40 },
-                ]
+        text:
+          interaction.tool === 'text' || interaction.tool === 'callout-box'
+            ? 'Feature Callout'
+            : undefined,
+        fontSize: 28,
+        points: isFreehandTool
+          ? interaction.points.length >= 2 && (rawW >= 15 || rawH >= 15)
+            ? interaction.points.map((p) => ({
+                x: Math.round(p.x - cx),
+                y: Math.round(p.y - cy),
+              }))
             : [
-                {
-                  x: rawW < 15 ? -80 : Math.round(interaction.startX - cx),
-                  y: rawH < 15 ? 50 : Math.round(interaction.startY - cy),
-                },
-                {
-                  x: rawW < 15 ? 80 : Math.round(interaction.currentX - cx),
-                  y: rawH < 15 ? -50 : Math.round(interaction.currentY - cy),
-                },
-              ],
+                { x: -80, y: 40 },
+                { x: 0, y: -40 },
+                { x: 80, y: 40 },
+              ]
+          : [
+              {
+                x: rawW < 15 ? -80 : Math.round(interaction.startX - cx),
+                y: rawH < 15 ? 50 : Math.round(interaction.startY - cy),
+              },
+              {
+                x: rawW < 15 ? 80 : Math.round(interaction.currentX - cx),
+                y: rawH < 15 ? -50 : Math.round(interaction.currentY - cy),
+              },
+            ],
         x: Math.round(cx),
         y: Math.round(cy),
         width: Math.round(w),
@@ -1393,10 +1852,19 @@ export const Canvas2DEditor: React.FC = () => {
         strokeColor: drawingDefaults.strokeColor,
         strokeColorEnd: drawingDefaults.strokeColorEnd,
         useGradientStroke: drawingDefaults.useGradientStroke,
-        strokeWidth: drawingDefaults.strokeWidth,
-        strokeOpacity: drawingDefaults.strokeOpacity,
+        strokeWidth:
+          interaction.tool === 'highlight-stroke'
+            ? 12
+            : drawingDefaults.strokeWidth,
+        strokeOpacity:
+          interaction.tool === 'highlight-stroke'
+            ? 0.42
+            : drawingDefaults.strokeOpacity,
         fillColor: drawingDefaults.fillColor,
-        fillOpacity: drawingDefaults.fillOpacity,
+        fillOpacity:
+          interaction.tool === 'callout-box' || interaction.tool === 'text'
+            ? Math.max(0.18, drawingDefaults.fillOpacity)
+            : drawingDefaults.fillOpacity,
         lineCap: 'round',
         lineJoin: 'round',
         dashPattern: drawingDefaults.dashPattern,
@@ -1441,24 +1909,96 @@ export const Canvas2DEditor: React.FC = () => {
     }
   };
 
-  const toolButtons: {
-    id: DrawingToolType;
-    label: string;
-    shortLabel: string;
-    icon: React.ComponentType<{ className?: string }>;
+  // Compact grouped canvas tool strip (organised by Select/Pan, Shapes, Freehand, Annotations, Eraser)
+  const toolGroups: {
+    group: string;
+    items: {
+      id: DrawingToolType;
+      label: string;
+      shortLabel: string;
+      icon: React.ComponentType<{ className?: string }>;
+    }[];
   }[] = [
-    { id: 'select', label: 'Select & Transform (V)', shortLabel: 'Select', icon: MousePointer },
-    { id: 'brush', label: 'Freehand Brush (B)', shortLabel: 'Brush', icon: Pencil },
-    { id: 'pen', label: 'Vector Pen (P)', shortLabel: 'Pen', icon: PenTool },
-    { id: 'line', label: 'Straight Line (L)', shortLabel: 'Line', icon: Minus },
-    { id: 'arrow', label: 'Arrow Callout (A)', shortLabel: 'Arrow', icon: ArrowUpRight },
-    { id: 'rect', label: 'Rectangle (R)', shortLabel: 'Rect', icon: RectangleHorizontal },
-    { id: 'rounded-rect', label: 'Rounded Rectangle (U)', shortLabel: 'Rounded', icon: Square },
-    { id: 'circle', label: 'Circle (C)', shortLabel: 'Circle', icon: Circle },
-    { id: 'ellipse', label: 'Ellipse / Halo (O)', shortLabel: 'Ellipse', icon: Circle },
-    { id: 'bezier', label: 'Smooth Curve', shortLabel: 'Curve', icon: Spline },
-    { id: 'polygon', label: 'Polygon', shortLabel: 'Poly', icon: Hexagon },
-    { id: 'eraser', label: 'Eraser (E)', shortLabel: 'Eraser', icon: Eraser },
+    {
+      group: 'select',
+      items: [
+        {
+          id: 'select',
+          label: 'Select & Transform (V)',
+          shortLabel: 'Select',
+          icon: MousePointer,
+        },
+        {
+          id: 'pan',
+          label: 'Pan Stage (Space / Alt)',
+          shortLabel: 'Pan',
+          icon: Move,
+        },
+      ],
+    },
+    {
+      group: 'shapes',
+      items: [
+        {
+          id: 'rounded-rect',
+          label: 'Rounded Rectangle',
+          shortLabel: 'Rect',
+          icon: Square,
+        },
+        {
+          id: 'circle',
+          label: 'Circle / Halo',
+          shortLabel: 'Circle',
+          icon: Circle,
+        },
+        {
+          id: 'arrow',
+          label: 'Callout Arrow',
+          shortLabel: 'Arrow',
+          icon: ArrowUpRight,
+        },
+      ],
+    },
+    {
+      group: 'freehand',
+      items: [
+        {
+          id: 'brush',
+          label: 'Freehand Brush',
+          shortLabel: 'Brush',
+          icon: Pencil,
+        },
+        {
+          id: 'bezier',
+          label: 'Smooth Bezier Curve',
+          shortLabel: 'Curve',
+          icon: Spline,
+        },
+      ],
+    },
+    {
+      group: 'annotate',
+      items: [
+        {
+          id: 'text',
+          label: 'Text Label',
+          shortLabel: 'Text',
+          icon: Type,
+        },
+        {
+          id: 'callout-box',
+          label: 'Callout Box',
+          shortLabel: 'Callout',
+          icon: MessageSquare,
+        },
+        {
+          id: 'eraser',
+          label: 'Eraser Tool',
+          shortLabel: 'Eraser',
+          icon: Eraser,
+        },
+      ],
+    },
   ];
 
   const activeSelectedDrawingObj = drawings.find(
@@ -1466,9 +2006,11 @@ export const Canvas2DEditor: React.FC = () => {
   );
 
   const stageCursorClass =
-    interaction.type === 'pan'
+    interaction.type === 'pan' || activeDrawingTool === 'pan'
       ? 'cursor-grabbing'
-      : activeDrawingTool === 'select'
+      : activeDrawingTool === 'select' ||
+          activeDrawingTool === 'multi-select' ||
+          activeDrawingTool === 'transform'
         ? 'cursor-default'
         : activeDrawingTool === 'eraser'
           ? 'cursor-cell'
@@ -1483,13 +2025,13 @@ export const Canvas2DEditor: React.FC = () => {
       onPointerCancel={handlePointerUp}
       onWheel={handleWheel}
       data-testid="canvas-2d-viewport"
-      className={`relative flex-1 h-full bg-[#090C12] overflow-hidden select-none touch-none flex items-center justify-center ${stageCursorClass}`}
+      className={`relative flex-1 h-full bg-[#F1F5F9] overflow-hidden select-none touch-none flex items-center justify-center ${stageCursorClass}`}
     >
       {/* Top Horizontal Pixel Ruler */}
       {showRulers && (
         <div
           aria-hidden="true"
-          className="absolute top-0 left-6 right-0 h-6 bg-[#0E131D] border-b border-slate-800/80 z-20 flex items-center px-3 text-[10px] font-mono tabular-nums text-slate-500 pointer-events-none"
+          className="absolute top-0 left-6 right-0 h-6 bg-white border-b border-slate-200 z-10 flex items-center px-10 text-[10px] font-mono tabular-nums text-slate-400 pointer-events-none"
         >
           <span>0px</span>
           <span className="ml-auto">X: {cursorCoords.x}px</span>
@@ -1502,7 +2044,7 @@ export const Canvas2DEditor: React.FC = () => {
       {showRulers && (
         <div
           aria-hidden="true"
-          className="absolute top-6 bottom-0 left-0 w-6 bg-[#0E131D] border-r border-slate-800/80 z-20 flex flex-col justify-between py-2 items-center text-[10px] font-mono tabular-nums text-slate-500 pointer-events-none"
+          className="absolute top-6 bottom-0 left-0 w-6 bg-white border-r border-slate-200 z-10 flex flex-col justify-between py-2 items-center text-[10px] font-mono tabular-nums text-slate-400 pointer-events-none"
         >
           <span>0</span>
           <span className="-rotate-90">{Math.round(canvasHeight / 2)}</span>
@@ -1510,49 +2052,51 @@ export const Canvas2DEditor: React.FC = () => {
         </div>
       )}
 
-      {/* Floating Top-Center Vector & Neon Glow Drawing Toolbar */}
+      {/* Compact White Top-Center Grouped Drawing & Selection Tool Strip */}
       <div
         data-hud-overlay="true"
         data-testid="canvas-drawing-toolbar"
-        className="absolute top-8 left-1/2 -translate-x-1/2 z-20 flex flex-wrap justify-center items-center gap-0.5 bg-[#111724]/95 border border-slate-700/90 rounded-xl px-1.5 py-1 shadow-xl max-w-[calc(100%-2.5rem)]"
+        className="absolute top-8 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 bg-white/95 backdrop-blur-xs border border-slate-200 rounded-lg px-2 py-1 shadow-xs max-w-[calc(100%-6rem)]"
       >
-        {toolButtons.map((tb) => {
-          const Icon = tb.icon;
-          const isActive = activeDrawingTool === tb.id;
-          return (
-            <button
-              key={tb.id}
-              type="button"
-              onClick={() => setActiveDrawingTool(tb.id)}
-              title={tb.label}
-              aria-label={tb.label}
-              aria-pressed={isActive}
-              data-testid={`drawing-tool-${tb.id}`}
-              className={`px-1.5 py-1 rounded-lg flex items-center gap-1 text-[10px] font-medium transition-colors whitespace-nowrap shrink-0 ${
-                isActive
-                  ? 'bg-sky-500 text-slate-950 font-semibold shadow-sm'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`}
-            >
-              <Icon className="w-3 h-3" />
-              <span className="hidden xl:inline">{tb.shortLabel}</span>
-            </button>
-          );
-        })}
+        {toolGroups.map((grp, gIdx) => (
+          <React.Fragment key={grp.group}>
+            {gIdx > 0 && <div className="w-px h-4 bg-slate-200 mx-0.5" />}
+            <div className="flex items-center gap-0.5">
+              {grp.items.map((tb) => {
+                const Icon = tb.icon;
+                const isActive = activeDrawingTool === tb.id;
+                return (
+                  <button
+                    key={tb.id}
+                    type="button"
+                    onClick={() => setActiveDrawingTool(tb.id)}
+                    title={tb.label}
+                    aria-label={tb.label}
+                    aria-pressed={isActive}
+                    data-testid={`drawing-tool-${tb.id}`}
+                    className={`px-2 py-1 rounded-md flex items-center gap-1 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      isActive
+                        ? 'bg-blue-600 text-white font-semibold shadow-2xs'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    <span className="hidden xl:inline">{tb.shortLabel}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </React.Fragment>
+        ))}
 
         {activeSelectedDrawingObj && (
           <>
-            <div className="w-px h-4 bg-slate-700 mx-1 shrink-0" />
-            <span className="hidden 2xl:inline text-[10px] font-mono tabular-nums text-cyan-300 px-1.5 shrink-0">
-              {Math.round(activeSelectedDrawingObj.width)}×
-              {Math.round(activeSelectedDrawingObj.height)}px
-            </span>
+            <div className="w-px h-4 bg-slate-200 mx-1 shrink-0" />
             <button
               type="button"
               onClick={() => duplicateDrawing(activeSelectedDrawingObj.id)}
               title="Duplicate Selected Drawing"
-              aria-label="Duplicate selected drawing from toolbar"
-              className="p-1 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors shrink-0"
+              className="p-1 rounded-md text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors shrink-0"
             >
               <Copy className="w-3.5 h-3.5" />
             </button>
@@ -1560,8 +2104,7 @@ export const Canvas2DEditor: React.FC = () => {
               type="button"
               onClick={() => deleteDrawing(activeSelectedDrawingObj.id)}
               title="Delete Selected Drawing (Del)"
-              aria-label="Delete selected drawing from toolbar"
-              className="p-1 rounded-lg text-rose-400 hover:bg-rose-500/20 hover:text-rose-200 transition-colors shrink-0"
+              className="p-1 rounded-md text-rose-600 hover:bg-rose-50 transition-colors shrink-0"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
@@ -1575,7 +2118,7 @@ export const Canvas2DEditor: React.FC = () => {
           transform: `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`,
           transformOrigin: 'center center',
         }}
-        className="relative shadow-2xl ring-1 ring-slate-700/70 transition-transform duration-75"
+        className="relative shadow-[0_12px_36px_rgba(15,23,42,0.14)] ring-1 ring-slate-300 transition-transform duration-75"
       >
         <canvas
           ref={canvasRef}
@@ -1586,31 +2129,31 @@ export const Canvas2DEditor: React.FC = () => {
         />
       </div>
 
-      {/* Bottom-Right Floating Viewport HUD Controls */}
+      {/* Bottom-Right Floating Viewport Zoom Controls */}
       <div
         data-hud-overlay="true"
-        className="absolute bottom-4 right-4 z-20 flex items-center gap-1.5 bg-[#111724]/95 border border-slate-800 rounded-lg px-2.5 py-1.5 shadow-lg"
+        className="absolute bottom-3.5 right-3.5 z-20 flex items-center gap-1 bg-white/95 border border-slate-200 rounded-lg px-2 py-1 shadow-xs"
       >
         <button
           type="button"
           onClick={() => setZoomAndPan(Number((zoom - 0.1).toFixed(2)))}
           aria-label="Zoom out canvas"
-          className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors"
+          className="p-1 text-slate-600 hover:text-slate-900 rounded hover:bg-slate-100 transition-colors"
         >
           <ZoomOut className="w-3.5 h-3.5" />
         </button>
-        <span className="text-xs font-mono tabular-nums text-slate-200 px-1.5 min-w-[48px] text-center">
+        <span className="text-xs font-mono tabular-nums text-slate-700 font-semibold px-1.5 min-w-[46px] text-center">
           {Math.round(zoom * 100)}%
         </span>
         <button
           type="button"
           onClick={() => setZoomAndPan(Number((zoom + 0.1).toFixed(2)))}
           aria-label="Zoom in canvas"
-          className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors"
+          className="p-1 text-slate-600 hover:text-slate-900 rounded hover:bg-slate-100 transition-colors"
         >
           <ZoomIn className="w-3.5 h-3.5" />
         </button>
-        <div className="w-px h-4 bg-slate-800 mx-1" />
+        <div className="w-px h-4 bg-slate-200 mx-0.5" />
         <button
           type="button"
           onClick={() => {
@@ -1628,52 +2171,51 @@ export const Canvas2DEditor: React.FC = () => {
             }
           }}
           aria-label="Reset canvas zoom and pan"
-          className="px-2 py-0.5 text-xs font-medium text-slate-300 hover:text-white rounded hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0"
+          className="px-2 py-0.5 text-xs font-medium text-slate-700 hover:text-blue-600 rounded hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0"
         >
           Fit Stage
         </button>
       </div>
 
       {/* Bottom-Left Quick Gesture & Onion Skin Legend */}
-      <div className="absolute bottom-4 left-10 z-20 hidden lg:flex items-center gap-3 text-[11px] text-slate-400 bg-[#111724]/95 border border-slate-800/80 rounded-lg px-3 py-1.5 pointer-events-none">
+      <div className="absolute bottom-3.5 left-9 z-20 hidden lg:flex items-center gap-2.5 text-[11px] text-slate-600 bg-white/95 border border-slate-200 rounded-lg px-3 py-1 shadow-xs pointer-events-none">
         {showMotionTrail ? (
           <div
             data-testid="onion-skin-hud-badge"
-            className="flex items-center gap-2.5 text-slate-200"
+            className="flex items-center gap-2 text-slate-700"
           >
-            <span className="font-semibold text-cyan-300 flex items-center gap-1">
+            <span className="font-semibold text-blue-600 flex items-center gap-1">
               <Spline className="w-3.5 h-3.5" />
-              Onion Skin Active
+              Motion Path
             </span>
-            <span aria-hidden="true" className="text-slate-600">
+            <span aria-hidden="true" className="text-slate-300">
               |
             </span>
-            <span className="flex items-center gap-1 text-cyan-300 font-mono text-[10px]">
-              <span className="w-2 h-2 rounded-full bg-cyan-400 inline-block" />
+            <span className="flex items-center gap-1 text-slate-600 font-mono text-[10px]">
+              <span className="w-2 h-2 rounded-full bg-sky-500 inline-block" />
               Past KF
             </span>
-            <span className="flex items-center gap-1 text-rose-300 font-mono text-[10px]">
+            <span className="flex items-center gap-1 text-slate-700 font-mono text-[10px]">
               <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />
-              Playhead F{String(currentFrame).padStart(3, '0')}
+              F{String(currentFrame).padStart(3, '0')}
             </span>
-            <span className="flex items-center gap-1 text-amber-300 font-mono text-[10px]">
-              <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+            <span className="flex items-center gap-1 text-slate-600 font-mono text-[10px]">
+              <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
               Next KF
             </span>
           </div>
         ) : (
           <>
-            <span className="flex items-center gap-1.5">
-              <Move className="w-3 h-3 text-sky-400" /> Drag to Move & Snap
+            <span className="flex items-center gap-1">
+              <Move className="w-3 h-3 text-blue-600" /> Drag to Move
             </span>
             <span aria-hidden="true">·</span>
-            <span className="flex items-center gap-1.5">
-              <Maximize2 className="w-3 h-3 text-sky-400" /> Corner Handles to
-              Resize
+            <span className="flex items-center gap-1">
+              <Maximize2 className="w-3 h-3 text-blue-600" /> Handles to Resize
             </span>
             <span aria-hidden="true">·</span>
-            <span className="flex items-center gap-1.5">
-              <RotateCw className="w-3 h-3 text-sky-400" /> Top Stem to Rotate
+            <span className="flex items-center gap-1">
+              <RotateCw className="w-3 h-3 text-blue-600" /> Stem to Rotate
             </span>
           </>
         )}

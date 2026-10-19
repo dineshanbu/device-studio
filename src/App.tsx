@@ -1,23 +1,24 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
 import React, { useEffect, useState } from 'react';
-import { LeftSidebar } from './packages/editor/LeftSidebar.tsx';
-import { ProjectManagerModal } from './packages/editor/ProjectManagerModal.tsx';
-import { RightInspector } from './packages/editor/RightInspector.tsx';
+import { PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { StudioToolbar } from './packages/editor/StudioToolbar.tsx';
-import { ExportModal } from './packages/export/ExportModal.tsx';
+import { LeftSidebar } from './packages/editor/LeftSidebar.tsx';
+import { RightInspector } from './packages/editor/RightInspector.tsx';
 import { Canvas2DEditor } from './packages/render-2d/Canvas2DEditor.tsx';
 import { Canvas3DSimulator } from './packages/render-3d/Canvas3DSimulator.tsx';
-import { useStudioStore } from './packages/scene-engine/store.ts';
 import { TimelinePanel } from './packages/timeline/TimelinePanel.tsx';
+import { ExportModal } from './packages/export/ExportModal.tsx';
+import { ProjectManagerModal } from './packages/editor/ProjectManagerModal.tsx';
+import { useStudioStore } from './packages/scene-engine/store.ts';
 
-export default function App() {
+export function App() {
   const {
     editorMode,
     isPlaying,
+    fps,
+    durationInFrames,
+    currentFrame,
+    loopPlayback,
+    setCurrentFrame,
     setIsPlaying,
     undo,
     redo,
@@ -25,167 +26,205 @@ export default function App() {
     duplicateSelectedDevices,
     copySelectedDevices,
     pasteDevices,
+    groupSelectedDevices,
+    ungroupSelectedDevices,
+    stepFrame,
+    addKeyframeAtCurrentFrame,
+    selectedIds,
+    selectedDrawingId,
+    selectedWebcamId,
+    deleteDrawing,
+    deleteWebcam,
     saveCurrentProject,
-    selectAllDevices,
+    splitSelectedClipAtPlayhead,
+    trimSelectedClipToPlayhead,
   } = useStudioStore();
 
-  const [mobilePanel, setMobilePanel] = useState<
-    'canvas' | 'library' | 'inspector'
-  >('canvas');
+  const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const [rightCollapsed, setRightCollapsed] = useState(false);
+
+  // Master timeline requestAnimationFrame loop
+  useEffect(() => {
+    if (!isPlaying) return;
+    let lastTime = performance.now();
+    let animId = 0;
+    const frameInterval = 1000 / fps;
+
+    const tick = (now: number) => {
+      const elapsed = now - lastTime;
+      if (elapsed >= frameInterval) {
+        lastTime = now - (elapsed % frameInterval);
+        const state = useStudioStore.getState();
+        const nextFrame = state.currentFrame + 1;
+        if (nextFrame >= state.durationInFrames) {
+          if (state.loopPlayback) {
+            state.setCurrentFrame(0);
+          } else {
+            state.setCurrentFrame(state.durationInFrames - 1);
+            state.setIsPlaying(false);
+            return;
+          }
+        } else {
+          state.setCurrentFrame(nextFrame);
+        }
+      }
+      animId = requestAnimationFrame(tick);
+    };
+
+    animId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animId);
+  }, [isPlaying, fps, durationInFrames, loopPlayback, setCurrentFrame, setIsPlaying]);
+
+  // Background auto-save every 20 seconds when changes occur
+  useEffect(() => {
+    const timer = setInterval(() => {
+      saveCurrentProject();
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [saveCurrentProject]);
 
   // Global Studio Keyboard Shortcuts
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.tagName === 'SELECT' ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
+    const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-      const isMod = e.metaKey || e.ctrlKey;
-
-      if (isMod && e.key.toLowerCase() === 'z') {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setIsPlaying(!useStudioStore.getState().isPlaying);
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) redo();
         else undo();
-        return;
-      }
-      if (isMod && e.key.toLowerCase() === 'y') {
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault();
         redo();
-        return;
-      }
-      if (isMod && e.key.toLowerCase() === 'd') {
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         duplicateSelectedDevices();
-        return;
-      }
-      if (isMod && e.key.toLowerCase() === 'c') {
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'c') {
         e.preventDefault();
         copySelectedDevices();
-        return;
-      }
-      if (isMod && e.key.toLowerCase() === 'v') {
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'v') {
         e.preventDefault();
         pasteDevices();
-        return;
-      }
-      if (isMod && e.key.toLowerCase() === 'a') {
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'g') {
         e.preventDefault();
-        selectAllDevices();
-        return;
-      }
-      if (isMod && e.key.toLowerCase() === 's') {
+        if (e.shiftKey) ungroupSelectedDevices();
+        else groupSelectedDevices();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         saveCurrentProject();
-        return;
-      }
-      if (e.key === 'Delete' || e.key === 'Backspace') {
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        deleteSelectedDevices();
-        return;
-      }
-      if (e.key === ' ') {
+        if (selectedWebcamId) {
+          deleteWebcam(selectedWebcamId);
+        } else if (selectedDrawingId) {
+          deleteDrawing(selectedDrawingId);
+        } else {
+          deleteSelectedDevices();
+        }
+      } else if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        setIsPlaying(!useStudioStore.getState().isPlaying);
+        stepFrame(e.shiftKey ? -10 : -1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        stepFrame(e.shiftKey ? 10 : 1);
+      } else if (e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        const target =
+          selectedWebcamId || selectedDrawingId || selectedIds[0];
+        if (target) addKeyframeAtCurrentFrame(target);
+      } else if (e.key.toLowerCase() === 's' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        splitSelectedClipAtPlayhead();
+      } else if (e.key === '[') {
+        e.preventDefault();
+        trimSelectedClipToPlayhead('left');
+      } else if (e.key === ']') {
+        e.preventDefault();
+        trimSelectedClipToPlayhead('right');
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [
+    setIsPlaying,
     undo,
     redo,
     duplicateSelectedDevices,
     copySelectedDevices,
     pasteDevices,
-    selectAllDevices,
-    saveCurrentProject,
+    groupSelectedDevices,
+    ungroupSelectedDevices,
     deleteSelectedDevices,
-    setIsPlaying,
+    deleteDrawing,
+    deleteWebcam,
+    stepFrame,
+    addKeyframeAtCurrentFrame,
+    selectedIds,
+    selectedDrawingId,
+    selectedWebcamId,
+    currentFrame,
+    saveCurrentProject,
+    splitSelectedClipAtPlayhead,
+    trimSelectedClipToPlayhead,
   ]);
-
-  // Autosave to IndexedDB every 15 seconds
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      saveCurrentProject();
-    }, 15000);
-    return () => window.clearInterval(timer);
-  }, [saveCurrentProject]);
 
   return (
     <div
-      data-state={isPlaying ? 'playing' : editorMode}
-      className="h-screen w-screen overflow-hidden flex flex-col bg-[#0B0E14] text-[#F1F5F9]"
+      data-theme="light"
+      className="h-screen w-screen overflow-hidden flex flex-col bg-[#F8FAFC] text-[#0F172A] select-none"
     >
-      {/* Top Bar & Workspace Sub-Toolbar */}
+      {/* Top Studio Header */}
       <StudioToolbar />
 
-      {/* Mobile Viewport Drawer Switcher (< 1024px) */}
-      <div className="flex lg:hidden items-center justify-around bg-[#0E131D] border-b border-slate-800 py-1.5 px-2 shrink-0">
-        {(
-          [
-            { id: 'library', label: 'Library & Layers' },
-            { id: 'canvas', label: 'Stage Viewport' },
-            { id: 'inspector', label: 'Properties' },
-          ] as const
-        ).map((tab) => (
+      {/* Main Middle Workspace: Left Sidebar + Center Viewport + Right Inspector */}
+      <div className="flex-1 flex min-h-0 overflow-hidden relative">
+        {!leftCollapsed && <LeftSidebar />}
+
+        {/* Center Viewport with subtle panel toggle handles */}
+        <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
+          {/* Subtle Left/Right Sidebar Collapse Toggles in top corners of viewport */}
           <button
-            key={tab.id}
-            type="button"
-            onClick={() => setMobilePanel(tab.id)}
-            className={`px-3 py-1 rounded text-xs font-medium ${
-              mobilePanel === tab.id
-                ? 'bg-sky-500 text-slate-950 font-semibold'
-                : 'text-slate-400'
-            }`}
+            onClick={() => setLeftCollapsed(!leftCollapsed)}
+            title={leftCollapsed ? 'Expand Left Asset Sidebar' : 'Collapse Left Asset Sidebar'}
+            className="absolute top-2.5 left-2.5 z-20 p-1.5 rounded-md bg-white/90 hover:bg-white text-slate-600 hover:text-slate-900 border border-slate-200/90 shadow-2xs transition-colors"
           >
-            {tab.label}
+            {leftCollapsed ? (
+              <PanelLeftOpen className="w-3.5 h-3.5" />
+            ) : (
+              <PanelLeftClose className="w-3.5 h-3.5" />
+            )}
           </button>
-        ))}
-      </div>
 
-      {/* Main 3-Column Studio Workspace */}
-      <main className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Left Sidebar (Desktop always visible, Mobile when active) */}
-        <div
-          className={`${
-            mobilePanel === 'library' ? 'flex w-full' : 'hidden'
-          } lg:flex lg:w-auto h-full`}
-        >
-          <LeftSidebar />
-        </div>
+          <button
+            onClick={() => setRightCollapsed(!rightCollapsed)}
+            title={rightCollapsed ? 'Expand Right Inspector' : 'Collapse Right Inspector'}
+            className="absolute top-2.5 right-2.5 z-20 p-1.5 rounded-md bg-white/90 hover:bg-white text-slate-600 hover:text-slate-900 border border-slate-200/90 shadow-2xs transition-colors"
+          >
+            {rightCollapsed ? (
+              <PanelRightOpen className="w-3.5 h-3.5" />
+            ) : (
+              <PanelRightClose className="w-3.5 h-3.5" />
+            )}
+          </button>
 
-        {/* Center Interactive Stage (2D Canvas or 3D Simulator) */}
-        <div
-          className={`${
-            mobilePanel === 'canvas' ? 'flex' : 'hidden lg:flex'
-          } flex-1 h-full min-w-0 flex-col`}
-        >
           {editorMode === '2d' ? <Canvas2DEditor /> : <Canvas3DSimulator />}
         </div>
 
-        {/* Right Object Properties & Effects Inspector */}
-        <div
-          className={`${
-            mobilePanel === 'inspector' ? 'flex w-full' : 'hidden'
-          } lg:flex lg:w-auto h-full`}
-        >
-          <RightInspector />
-        </div>
-      </main>
+        {!rightCollapsed && <RightInspector />}
+      </div>
 
-      {/* Bottom Collapsible Deterministic Animation Timeline */}
+      {/* Bottom Keyframe & Animation Timeline */}
       <TimelinePanel />
 
       {/* Modals */}
-      <ProjectManagerModal />
       <ExportModal />
+      <ProjectManagerModal />
     </div>
   );
 }
+
+export default App;

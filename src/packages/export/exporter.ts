@@ -10,6 +10,7 @@ import type {
   SceneBackground,
   SceneDeviceObject,
   SceneDrawingObject,
+  SceneWebcamOverlay,
   TimelineClip,
   TimelineTrack,
 } from '../shared/types.ts';
@@ -20,6 +21,7 @@ export interface ExportSceneInput {
   durationInFrames: number;
   devices: SceneDeviceObject[];
   drawings?: SceneDrawingObject[];
+  webcams?: SceneWebcamOverlay[];
   clips?: TimelineClip[];
   tracks: TimelineTrack[];
   mediaAssets: MediaAsset[];
@@ -175,7 +177,23 @@ export async function executeStudioExport(
     }));
   };
 
+  const scaleWebcamsToOutput = (
+    wcs: SceneWebcamOverlay[] = []
+  ): SceneWebcamOverlay[] => {
+    const sx = width / 1920;
+    const sy = height / 1080;
+    const uniform = Math.min(sx, sy);
+    return wcs.map((w) => ({
+      ...w,
+      x: w.x * sx,
+      y: w.y * sy,
+      scaleX: w.scaleX * uniform,
+      scaleY: w.scaleY * uniform,
+    }));
+  };
+
   const scaledDevices = scaleDevicesToOutput(input.devices);
+  const scaledWebcams = scaleWebcamsToOutput(input.webcams);
   const scaledTracks = scaleTracksToOutput(input.tracks);
 
   // 2. Still Image Export (PNG, JPG, WebP)
@@ -193,6 +211,7 @@ export async function executeStudioExport(
       durationInFrames: input.durationInFrames,
       devices: scaledDevices,
       drawings: input.drawings,
+      webcams: scaledWebcams,
       clips: input.clips,
       tracks: scaledTracks,
       mediaAssets: input.mediaAssets,
@@ -280,6 +299,7 @@ export async function executeStudioExport(
         durationInFrames: input.durationInFrames,
         devices: scaledDevices,
         drawings: input.drawings,
+        webcams: scaledWebcams,
         clips: input.clips,
         tracks: scaledTracks,
         mediaAssets: input.mediaAssets,
@@ -322,6 +342,7 @@ export async function executeStudioExport(
     durationInFrames: input.durationInFrames,
     devices: scaledDevices,
     drawings: input.drawings,
+    webcams: scaledWebcams,
     clips: input.clips,
     tracks: scaledTracks,
     mediaAssets: input.mediaAssets,

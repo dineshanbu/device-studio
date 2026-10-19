@@ -15,7 +15,15 @@ export type EasingType =
   | 'ease-out'
   | 'ease-in-out'
   | 'cubic-bezier'
-  | 'spring';
+  | 'spring'
+  | 'custom-path';
+
+export interface CustomBezierControlPoints {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
 
 export type NotchType =
   | 'dynamic-island'
@@ -44,17 +52,36 @@ export type GlowAnimationMode =
 
 export type DrawingToolType =
   | 'select'
+  | 'multi-select'
+  | 'pan'
+  | 'transform'
   | 'brush'
   | 'pen'
+  | 'bezier'
+  | 'freehand'
+  | 'eraser'
   | 'line'
   | 'arrow'
+  | 'curved-arrow'
   | 'rect'
   | 'rounded-rect'
   | 'circle'
   | 'ellipse'
+  | 'triangle'
+  | 'diamond'
   | 'polygon'
-  | 'bezier'
-  | 'eraser';
+  | 'star'
+  | 'text'
+  | 'arrow-pointer'
+  | 'highlight'
+  | 'highlight-stroke'
+  | 'callout'
+  | 'callout-box'
+  | 'underline'
+  | 'glow-outline'
+  | 'pulse-ring'
+  | 'neon-path'
+  | 'animated-stroke';
 
 export type DrawingAnimationMode =
   | 'none'
@@ -136,6 +163,7 @@ export interface DevicePreset {
   name: string;
   category: DeviceCategory;
   brand: string;
+  badge?: string;
   /** Base logical dimensions in canvas pixels */
   width: number;
   height: number;
@@ -199,11 +227,35 @@ export interface ObjectEffects {
   blur: number;
   entranceAnimation:
     | 'none'
+    | 'fade-in'
     | 'fade-up'
     | 'scale-pop'
+    | 'zoom-in'
+    | 'zoom-out'
     | 'slide-left'
+    | 'slide-right'
+    | 'slide-up'
+    | 'slide-down'
     | 'rotate-3d';
-  exitAnimation: 'none' | 'fade-out' | 'scale-down';
+  exitAnimation:
+    | 'none'
+    | 'fade-out'
+    | 'scale-down'
+    | 'zoom-out'
+    | 'slide-left'
+    | 'slide-right'
+    | 'slide-down';
+  entranceEasing?: EasingType;
+  exitEasing?: EasingType;
+  customBezierPoints?: CustomBezierControlPoints;
+  transitionStartDelayMs?: number;
+  transitionStartOpacity?: number;
+  transitionEndOpacity?: number;
+  transitionRotation?: number;
+  transitionScale?: number;
+  motionBlur?: boolean;
+  motionBlurIntensity?: number;
+  loopTransition?: boolean;
   effectStackOrder?: 'shadow-glow-frame' | 'glow-shadow-frame';
 }
 
@@ -246,13 +298,53 @@ export interface SceneDeviceObject {
   customRoughness?: number;
   customMetalness?: number;
   browserTheme?: BrowserThemeConfig;
+  activeTransitionPresetId?: AnimationPresetId;
+  activeTransitionEasing?: EasingType;
+  activeTransitionCustomBezier?: CustomBezierControlPoints;
+  activeTransitionStartDelayMs?: number;
+  activeTransitionDurationMs?: number;
+  activeTransitionStartOpacity?: number;
+  activeTransitionEndOpacity?: number;
+  activeTransitionRotation?: number;
+  activeTransitionScale?: number;
+  activeTransitionMotionBlur?: boolean;
+  activeTransitionMotionBlurIntensity?: number;
+  activeTransitionLoop?: boolean;
   effects: ObjectEffects;
 }
+
+export interface CopiedDeviceTransition {
+  presetId: AnimationPresetId | null;
+  startDelayMs?: number;
+  durationMs: number;
+  easing: EasingType;
+  customBezier?: CustomBezierControlPoints;
+  startOpacity: number;
+  endOpacity: number;
+  rotation?: number;
+  scale?: number;
+  motionBlur: boolean;
+  motionBlurIntensity: number;
+  loopTransition?: boolean;
+  entranceAnimation?: ObjectEffects['entranceAnimation'];
+  exitAnimation?: ObjectEffects['exitAnimation'];
+  sourceDeviceId: string;
+  sourceDeviceName: string;
+  copiedAt: number;
+}
+
+export type DrawableToolType = Exclude<
+  DrawingToolType,
+  'select' | 'multi-select' | 'pan' | 'transform' | 'eraser'
+>;
 
 export interface SceneDrawingObject {
   id: string;
   name: string;
-  tool: Exclude<DrawingToolType, 'select' | 'eraser'>;
+  tool: DrawableToolType;
+  /** Optional text label for text / callout annotations */
+  text?: string;
+  fontSize?: number;
   /** Points relative to (x, y) center or local bounding box */
   points: { x: number; y: number }[];
   x: number;
@@ -306,10 +398,13 @@ export interface SceneDrawingObject {
 export interface SceneWebcamOverlay {
   id: string;
   name: string;
-  sourceType: 'live-camera' | 'media-asset' | 'procedural-presenter';
+  sourceType?: 'live-camera' | 'media-asset' | 'procedural-presenter';
   mediaId: string | null;
+  useLiveCamera?: boolean;
   cameraDeviceId?: string;
+  cameraResolution?: '720p' | '1080p' | '4k';
   resolutionPreset?: '720p' | '1080p' | '4k';
+  cameraFps?: 30 | 60;
   targetFps?: 30 | 60;
   /** 2D Canvas center-based transform */
   x: number;
@@ -320,6 +415,8 @@ export interface SceneWebcamOverlay {
   scaleY: number;
   rotation: number;
   lockAspectRatio: boolean;
+  anchorPoint?: 'center' | 'top-left' | 'bottom-right';
+  layerPosition?: 'above-devices' | 'below-devices' | 'between';
   opacity: number;
   visible: boolean;
   locked: boolean;
@@ -328,9 +425,15 @@ export interface SceneWebcamOverlay {
   shape: WebcamFrameShapeType;
   stylePreset: WebcamStylePresetId;
   cornerRadius: number;
+  cornerRadiusTL?: number;
+  cornerRadiusTR?: number;
+  cornerRadiusBR?: number;
+  cornerRadiusBL?: number;
+  individualCorners?: boolean;
   curveIntensity: number;
   curveTension: number;
-  shapeOffset: number;
+  asymmetry?: number;
+  shapeOffset?: number;
   innerPadding: number;
   bezierPoints: { x: number; y: number }[];
   customSvgPath?: string;
@@ -339,26 +442,27 @@ export interface SceneWebcamOverlay {
   zoom: number;
   panX: number;
   panY: number;
-  cropX: number;
-  cropY: number;
-  cropWidth: number;
-  cropHeight: number;
+  cropX?: number;
+  cropY?: number;
+  cropWidth?: number;
+  cropHeight?: number;
   mirrorHorizontal: boolean;
-  brightness: number;
-  contrast: number;
-  saturation: number;
-  exposure: number;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  exposure?: number;
   /** Border Settings */
   borderEnabled: boolean;
   borderWidth: number;
   borderColor: string;
   borderSecondaryColor: string;
   borderGradient: boolean;
+  borderGradientAngle?: number;
   borderOpacity: number;
   borderStyle: 'solid' | 'dashed' | 'dotted' | 'double' | 'glass' | 'hud';
   borderAnimationMode: WebcamBorderAnimationMode;
   borderAnimationSpeed: number;
-  borderAnimationProgress?: number;
+  borderAnimationProgress: number;
   /** Glow & Shadow Settings */
   glowEnabled: boolean;
   glowType: WebcamGlowType;
@@ -371,6 +475,8 @@ export interface SceneWebcamOverlay {
   shadowEnabled: boolean;
   shadowColor: string;
   shadowBlur: number;
+  shadowOpacity?: number;
+  shadowOffsetX?: number;
   shadowOffsetY: number;
   /** Timeline Visibility & Transitions */
   startFrame: number;
@@ -465,6 +571,7 @@ export interface Keyframe {
   id: string;
   frame: number;
   easing: EasingType;
+  customBezier?: CustomBezierControlPoints;
   properties: {
     x?: number;
     y?: number;
@@ -513,7 +620,97 @@ export interface TimelineTrack {
   expanded?: boolean;
 }
 
-export type BackgroundType = 'solid' | 'gradient' | 'preset' | 'media';
+export type BackgroundType =
+  | 'solid'
+  | 'gradient'
+  | 'preset'
+  | 'media'
+  | 'transparent';
+
+export type BackgroundLayerKind =
+  | 'solid'
+  | 'gradient'
+  | 'image'
+  | 'video'
+  | 'pattern'
+  | 'texture'
+  | 'decorative-shape'
+  | 'light-effect'
+  | 'particles'
+  | 'vignette';
+
+export type BackgroundBlendMode =
+  | 'normal'
+  | 'source-over'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'soft-light'
+  | 'lighten'
+  | 'color-dodge';
+
+export interface BackgroundLayerItem {
+  id: string;
+  name: string;
+  kind: BackgroundLayerKind;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+  blendMode: BackgroundBlendMode;
+  zIndex?: number;
+  /** Solid & Gradient colours */
+  color?: string;
+  solidColor?: string;
+  gradientType?: 'linear' | 'radial' | 'conic';
+  gradientStart?: string;
+  gradientEnd?: string;
+  gradientAngle?: number;
+  /** Media reference (Image or Video asset ID) */
+  mediaId?: string | null;
+  fitMode?: ScreenFitMode | 'fill' | 'tile';
+  loopVideo?: boolean;
+  playbackSpeed?: number;
+  startFrame?: number;
+  trimStartFrames?: number;
+  durationFrames?: number;
+  /** Pattern / Texture / Decorative / Light parameters */
+  patternType?:
+    | 'dots'
+    | 'grid'
+    | 'diagonal'
+    | 'diagonal-lines'
+    | 'crosshatch'
+    | 'halftone'
+    | 'checker'
+    | 'noise';
+  patternScale?: number;
+  decorativeShape?:
+    | 'circle-aura'
+    | 'arch-frame'
+    | 'diagonal-beam'
+    | 'geo-rings'
+    | 'geometric-ring'
+    | 'soft-orb'
+    | 'glow-orb'
+    | 'soft-wave';
+  vignetteIntensity?: number;
+  /** Layer Transform & Crop */
+  x?: number;
+  y?: number;
+  positionX?: number;
+  positionY?: number;
+  scale: number;
+  rotation: number;
+  cropX?: number;
+  cropY?: number;
+  cropWidth?: number;
+  cropHeight?: number;
+  /** Layer Effects */
+  blur: number;
+  glowEnabled?: boolean;
+  glowColor?: string;
+  glowIntensity?: number;
+}
 
 export interface SceneBackground {
   type: BackgroundType;
@@ -527,6 +724,8 @@ export interface SceneBackground {
   particleDensity: number;
   gridOverlay: boolean;
   vignetteIntensity: number;
+  /** Independent stack of composable background & decorative layers */
+  layers?: BackgroundLayerItem[];
 }
 
 export type CameraPresetId =
@@ -568,6 +767,8 @@ export interface ExportSettings {
 export interface ThemePalettePreset {
   id: string;
   name: string;
+  category?: string;
+  backgroundStart?: string;
   frameColor: string;
   frameSecondaryColor: string;
   buttonColor: string;
@@ -581,22 +782,74 @@ export interface ThemePalettePreset {
 }
 
 export type AnimationPresetId =
+  | 'slide-in'
+  | 'slide-in-left'
+  | 'slide-in-right'
+  | 'slide-in-up'
+  | 'slide-in-down'
+  | 'slide-out'
+  | 'fade'
+  | 'fade-in'
+  | 'fade-out'
+  | 'fade-in-out'
+  | 'fade-up'
+  | 'zoom'
   | 'zoom-in'
   | 'zoom-out'
+  | 'zoom-bounce'
+  | 'zoom-punch-out'
   | 'smooth-scale'
   | 'device-slide-in'
-  | 'fade-in-out'
   | 'rotation-reveal'
+  | 'flip-3d'
+  | 'tilt-reveal-3d'
   | 'floating-motion'
   | 'camera-push-in'
   | 'glow-pulse'
   | 'neon-border-sweep'
   | 'spring-bounce';
 
+export type TransitionPresetCategory =
+  | 'Slide'
+  | 'Fade'
+  | 'Zoom'
+  | '3D'
+  | 'Loop';
+
+export type TransitionPresetGroup = 'Entrances' | 'Exits' | 'Emphasis';
+
+export type TransitionTimingMode =
+  | 'from-start'
+  | 'at-playhead'
+  | 'full-timeline';
+
+export interface DeviceTransitionPreset {
+  id: AnimationPresetId;
+  name: string;
+  shortLabel: string;
+  category: TransitionPresetCategory;
+  group: TransitionPresetGroup;
+  badge: string;
+  description: string;
+  defaultDurationFrames: number;
+  defaultEasing: EasingType;
+  directionHint:
+    | 'left'
+    | 'right'
+    | 'up'
+    | 'down'
+    | 'in'
+    | 'out'
+    | 'fade'
+    | '3d'
+    | 'loop';
+}
+
 export interface CustomWebcamShapePreset {
   id: string;
   name: string;
   shape: WebcamFrameShapeType;
+  cornerRadius?: number;
   curveIntensity: number;
   curveTension: number;
   bezierPoints: { x: number; y: number }[];

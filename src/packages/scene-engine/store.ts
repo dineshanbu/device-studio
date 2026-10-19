@@ -6,6 +6,7 @@ import {
   DEFAULT_SCREEN_TRANSFORM,
   DEFAULT_WEBCAM_BEZIER_POINTS,
   DEVICE_FRAME_SWATCHES,
+  DEVICE_TRANSITION_PRESETS,
   GLOBAL_THEME_PALETTES,
   WEBCAM_PIP_PRESETS,
   WEBCAM_SHAPE_LIBRARY,
@@ -20,8 +21,12 @@ import {
 import type {
   AnimationPresetId,
   AspectRatioPreset,
+  BackgroundLayerItem,
+  BackgroundLayerKind,
   BrowserThemeConfig,
   CameraPresetId,
+  CopiedDeviceTransition,
+  CustomBezierControlPoints,
   CustomWebcamShapePreset,
   DrawingToolType,
   EasingType,
@@ -38,11 +43,14 @@ import type {
   ThemePalettePreset,
   TimelineClip,
   TimelineTrack,
+  TransitionTimingMode,
   WebcamFrameShapeType,
   WebcamStylePresetId,
 } from '../shared/types.ts';
 import { saveProjectToDb } from './db.ts';
 import {
+  clampCustomBezierPoints,
+  computeTransitionDelayFrames,
   computeTrimmedClip,
   computeTrimmedDrawingClip,
   computeTrimmedWebcamClip,
@@ -121,6 +129,8 @@ export interface StudioState {
   selectedKeyframe: { trackId: string; keyframeId: string } | null;
   copiedDevices: SceneDeviceObject[];
   copiedKeyframe: Keyframe | null;
+  copiedTransition: CopiedDeviceTransition | null;
+  favoriteTransitionPresetIds: AnimationPresetId[];
   mediaAssets: MediaAsset[];
   clips: TimelineClip[];
   tracks: TimelineTrack[];
@@ -322,8 +332,31 @@ export interface StudioState {
   deleteSelectedClip: () => void;
 
   // Background & 3D Studio
+  selectedBackgroundLayerId: string | null;
+  selectBackgroundLayer: (layerId: string | null) => void;
   updateBackground: (patch: Partial<SceneBackground>) => void;
   applyBackgroundPreset: (presetId: string) => void;
+  addBackgroundLayer: (
+    layer: Partial<BackgroundLayerItem> & {
+      kind: BackgroundLayerKind;
+      name?: string;
+    }
+  ) => void;
+  updateBackgroundLayer: (
+    layerId: string,
+    patch: Partial<BackgroundLayerItem>
+  ) => void;
+  removeBackgroundLayer: (layerId: string) => void;
+  duplicateBackgroundLayer: (layerId: string) => void;
+  reorderBackgroundLayer: (
+    layerId: string,
+    direction: 'up' | 'down' | 'top' | 'bottom'
+  ) => void;
+  reorderSceneLayer: (
+    kind: 'device' | 'webcam' | 'drawing',
+    id: string,
+    direction: 'up' | 'down' | 'top' | 'bottom'
+  ) => void;
   updateStudio3D: (patch: Partial<Studio3DSettings>) => void;
   setCameraPreset3D: (preset: CameraPresetId) => void;
 
@@ -348,10 +381,124 @@ export interface StudioState {
     keyframeId: string,
     easing: EasingType
   ) => void;
+  updateDeviceTransitionEasing: (
+    deviceId: string,
+    easing: EasingType,
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
+  updateDeviceTransitionDuration: (
+    deviceId: string,
+    durationMs: number,
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
+  updateDeviceTransitionOpacity: (
+    deviceId: string,
+    opacityRange: {
+      startOpacity?: number;
+      endOpacity?: number;
+    },
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
+  updateDeviceTransitionMotionBlur: (
+    deviceId: string,
+    motionBlurConfig: {
+      enabled?: boolean;
+      intensity?: number;
+    },
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
+  updateDeviceTransitionLoop: (
+    deviceId: string,
+    loop: boolean,
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
+  updateDeviceTransitionCustomBezier: (
+    deviceId: string,
+    customBezier: CustomBezierControlPoints,
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
+  updateDeviceTransitionStartDelay: (
+    deviceId: string,
+    startDelayMs: number,
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
+  updateDeviceTransitionTransform: (
+    deviceId: string,
+    transformConfig: {
+      rotation?: number;
+      scale?: number;
+    },
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
   applyAnimationPresetToDevice: (
     deviceId: string,
-    presetId: AnimationPresetId
+    presetId: AnimationPresetId,
+    options?: {
+      timingMode?: TransitionTimingMode;
+      transitionDurationFrames?: number;
+      transitionDurationMs?: number;
+      startDelayMs?: number;
+      easing?: EasingType;
+      customBezier?: CustomBezierControlPoints;
+      startOpacity?: number;
+      endOpacity?: number;
+      transitionRotation?: number;
+      transitionScale?: number;
+      motionBlur?: boolean;
+      motionBlurIntensity?: number;
+      loopTransition?: boolean;
+      staggerFrames?: number;
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
   ) => void;
+  resetDeviceTransition: (
+    deviceId: string,
+    options?: {
+      applyToAllSelected?: boolean;
+    }
+  ) => void;
+  copyDeviceTransition: (
+    deviceId: string,
+    overrides?: Partial<
+      Omit<
+        CopiedDeviceTransition,
+        'sourceDeviceId' | 'sourceDeviceName' | 'copiedAt'
+      >
+    >
+  ) => void;
+  pasteDeviceTransition: (
+    deviceId: string,
+    options?: {
+      applyToAllSelected?: boolean;
+      autoPlay?: boolean;
+    }
+  ) => void;
+  toggleFavoriteTransitionPreset: (presetId: AnimationPresetId) => void;
 
   // Templates & Project Lifecycle
   applySceneTemplate: (templateId: string) => void;
@@ -654,9 +801,88 @@ function createInitialSceneData(): {
   };
 }
 
+const DEFAULT_BACKGROUND_LAYERS: BackgroundLayerItem[] = [
+  {
+    id: 'bg-layer-base',
+    name: 'Atmospheric Studio Gradient',
+    kind: 'gradient',
+    visible: true,
+    locked: false,
+    opacity: 1,
+    blendMode: 'normal',
+    blur: 0,
+    scale: 1,
+    positionX: 0,
+    positionY: 0,
+    rotation: 0,
+    fitMode: 'cover',
+    color: '#090D16',
+    gradientType: 'linear',
+    gradientStart: '#090D16',
+    gradientEnd: '#1E1B4B',
+    gradientAngle: 135,
+  },
+  {
+    id: 'bg-layer-grid',
+    name: 'Architectural Blueprint Grid',
+    kind: 'pattern',
+    visible: true,
+    locked: false,
+    opacity: 0.14,
+    blendMode: 'screen',
+    blur: 0,
+    scale: 1,
+    positionX: 0,
+    positionY: 0,
+    rotation: 0,
+    fitMode: 'tile',
+    color: '#38BDF8',
+    patternType: 'grid',
+    patternScale: 32,
+  },
+  {
+    id: 'bg-layer-spotlight',
+    name: 'Ambient Radial Spotlight',
+    kind: 'gradient',
+    visible: true,
+    locked: false,
+    opacity: 0.32,
+    blendMode: 'screen',
+    blur: 16,
+    scale: 1,
+    positionX: 0,
+    positionY: -80,
+    rotation: 0,
+    fitMode: 'cover',
+    color: '#0EA5E9',
+    gradientType: 'radial',
+    gradientStart: '#0EA5E9',
+    gradientEnd: '#000000',
+    gradientAngle: 0,
+  },
+  {
+    id: 'bg-layer-vignette',
+    name: 'Cinema Edge Vignette',
+    kind: 'vignette',
+    visible: true,
+    locked: false,
+    opacity: 0.65,
+    blendMode: 'multiply',
+    blur: 0,
+    scale: 1,
+    positionX: 0,
+    positionY: 0,
+    rotation: 0,
+    fitMode: 'cover',
+    color: '#020617',
+    vignetteIntensity: 0.42,
+  },
+];
+
 const initialScene = createInitialSceneData();
 const initialBackground: SceneBackground = {
   ...BACKGROUND_PRESETS[0].background,
+  layers: DEFAULT_BACKGROUND_LAYERS.map((l) => ({ ...l })),
 };
 const initialStudio3D: Studio3DSettings = {
   cameraPreset: 'three-quarter-left',
@@ -713,8 +939,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   selectedWebcamId: null,
   selectedClipId: null,
   selectedKeyframe: null,
+  selectedBackgroundLayerId: DEFAULT_BACKGROUND_LAYERS[0].id,
   copiedDevices: [],
   copiedKeyframe: null,
+  copiedTransition: null,
+  favoriteTransitionPresetIds: [],
   mediaAssets: [...BUILTIN_PROCEDURAL_MEDIA],
   clips: initialScene.clips,
   tracks: initialScene.tracks,
@@ -2112,21 +2341,44 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   updateWebcam: (id, patch, recordHistory = true) => {
     set((state) => {
+      let resolvedPatch = { ...patch };
       const updatedWebcams = state.webcams.map((wc) => {
         if (wc.id !== id) return wc;
         const next = { ...wc, ...patch };
-        if (
-          patch.shape &&
-          patch.shape !== wc.shape &&
-          patch.width === undefined &&
-          patch.height === undefined
-        ) {
+        if (patch.shape) {
           const shapeDef = WEBCAM_SHAPE_LIBRARY.find((s) => s.id === patch.shape);
           if (shapeDef) {
-            next.width = shapeDef.defaultWidth;
-            next.height = shapeDef.defaultHeight;
-            next.cornerRadius = shapeDef.cornerRadius;
-            next.curveIntensity = shapeDef.curveIntensity;
+            if (patch.width === undefined && patch.height === undefined) {
+              next.width = shapeDef.defaultWidth;
+              next.height = shapeDef.defaultHeight;
+              resolvedPatch.width = shapeDef.defaultWidth;
+              resolvedPatch.height = shapeDef.defaultHeight;
+            }
+            if (patch.cornerRadius === undefined) {
+              next.cornerRadius = shapeDef.cornerRadius;
+              next.cornerRadiusTL = shapeDef.cornerRadius;
+              next.cornerRadiusTR = shapeDef.cornerRadius;
+              next.cornerRadiusBR = shapeDef.cornerRadius;
+              next.cornerRadiusBL = shapeDef.cornerRadius;
+              next.individualCorners = false;
+              resolvedPatch.cornerRadius = shapeDef.cornerRadius;
+            }
+            if (patch.curveIntensity === undefined) {
+              next.curveIntensity = shapeDef.curveIntensity;
+              resolvedPatch.curveIntensity = shapeDef.curveIntensity;
+            }
+            if (patch.lockAspectRatio === undefined) {
+              next.lockAspectRatio =
+                patch.shape === 'circle' || patch.shape === 'square';
+            }
+            if (
+              patch.name === undefined &&
+              /^Webcam Overlay #\d+\s*\(.*\)$/.test(wc.name)
+            ) {
+              const numMatch = wc.name.match(/#\d+/);
+              next.name = `Webcam Overlay ${numMatch ? numMatch[0] : '#1'} (${shapeDef.name})`;
+              resolvedPatch.name = next.name;
+            }
           }
         }
         return next;
@@ -2139,64 +2391,89 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         if (track.targetId !== id) return track;
         const idx = track.keyframes.findIndex((kf) => kf.frame === frame);
         const hasAnimPatch =
-          patch.x !== undefined ||
-          patch.y !== undefined ||
-          patch.width !== undefined ||
-          patch.height !== undefined ||
-          patch.scaleX !== undefined ||
-          patch.scaleY !== undefined ||
-          patch.rotation !== undefined ||
-          patch.opacity !== undefined ||
-          patch.cornerRadius !== undefined ||
-          patch.borderWidth !== undefined ||
-          patch.borderColor !== undefined ||
-          patch.borderOpacity !== undefined ||
-          patch.glowRadius !== undefined ||
-          patch.glowIntensity !== undefined ||
-          patch.glowColor !== undefined ||
-          patch.zoom !== undefined ||
-          patch.panX !== undefined ||
-          patch.panY !== undefined ||
-          patch.borderAnimationProgress !== undefined ||
-          patch.curveIntensity !== undefined;
+          resolvedPatch.x !== undefined ||
+          resolvedPatch.y !== undefined ||
+          resolvedPatch.width !== undefined ||
+          resolvedPatch.height !== undefined ||
+          resolvedPatch.scaleX !== undefined ||
+          resolvedPatch.scaleY !== undefined ||
+          resolvedPatch.rotation !== undefined ||
+          resolvedPatch.opacity !== undefined ||
+          resolvedPatch.cornerRadius !== undefined ||
+          resolvedPatch.borderWidth !== undefined ||
+          resolvedPatch.borderColor !== undefined ||
+          resolvedPatch.borderOpacity !== undefined ||
+          resolvedPatch.glowRadius !== undefined ||
+          resolvedPatch.glowIntensity !== undefined ||
+          resolvedPatch.glowColor !== undefined ||
+          resolvedPatch.zoom !== undefined ||
+          resolvedPatch.panX !== undefined ||
+          resolvedPatch.panY !== undefined ||
+          resolvedPatch.borderAnimationProgress !== undefined ||
+          resolvedPatch.curveIntensity !== undefined;
 
         if (!hasAnimPatch) {
-          return { ...track, label: patch.name ?? track.label };
+          return { ...track, label: resolvedPatch.name ?? track.label };
         }
 
-        const applyPatchToProps = (base: Keyframe['properties']): Keyframe['properties'] => {
+        const applyPatchToProps = (
+          base: Keyframe['properties']
+        ): Keyframe['properties'] => {
           const nextProps = { ...base };
-          if (patch.x !== undefined) nextProps.x = patch.x;
-          if (patch.y !== undefined) nextProps.y = patch.y;
-          if (patch.width !== undefined) nextProps.width = patch.width;
-          if (patch.height !== undefined) nextProps.height = patch.height;
-          if (patch.scaleX !== undefined) nextProps.scaleX = patch.scaleX;
-          if (patch.scaleY !== undefined) nextProps.scaleY = patch.scaleY;
-          if (patch.rotation !== undefined) nextProps.rotation = patch.rotation;
-          if (patch.opacity !== undefined) nextProps.opacity = patch.opacity;
-          if (patch.cornerRadius !== undefined)
-            nextProps.cornerRadius = patch.cornerRadius;
-          if (patch.borderWidth !== undefined)
-            nextProps.strokeWidth = patch.borderWidth;
-          if (patch.borderColor !== undefined)
-            nextProps.strokeColor = patch.borderColor;
-          if (patch.borderOpacity !== undefined)
-            nextProps.borderOpacity = patch.borderOpacity;
-          if (patch.glowRadius !== undefined)
-            nextProps.glowBlur = patch.glowRadius;
-          if (patch.glowIntensity !== undefined)
-            nextProps.glowIntensity = patch.glowIntensity;
-          if (patch.glowColor !== undefined)
-            nextProps.glowColor = patch.glowColor;
-          if (patch.zoom !== undefined) nextProps.cropZoom = patch.zoom;
-          if (patch.panX !== undefined) nextProps.panX = patch.panX;
-          if (patch.panY !== undefined) nextProps.panY = patch.panY;
-          if (patch.borderAnimationProgress !== undefined)
-            nextProps.borderProgress = patch.borderAnimationProgress;
-          if (patch.curveIntensity !== undefined)
-            nextProps.curveIntensity = patch.curveIntensity;
+          if (resolvedPatch.x !== undefined) nextProps.x = resolvedPatch.x;
+          if (resolvedPatch.y !== undefined) nextProps.y = resolvedPatch.y;
+          if (resolvedPatch.width !== undefined)
+            nextProps.width = resolvedPatch.width;
+          if (resolvedPatch.height !== undefined)
+            nextProps.height = resolvedPatch.height;
+          if (resolvedPatch.scaleX !== undefined)
+            nextProps.scaleX = resolvedPatch.scaleX;
+          if (resolvedPatch.scaleY !== undefined)
+            nextProps.scaleY = resolvedPatch.scaleY;
+          if (resolvedPatch.rotation !== undefined)
+            nextProps.rotation = resolvedPatch.rotation;
+          if (resolvedPatch.opacity !== undefined)
+            nextProps.opacity = resolvedPatch.opacity;
+          if (resolvedPatch.cornerRadius !== undefined)
+            nextProps.cornerRadius = resolvedPatch.cornerRadius;
+          if (resolvedPatch.borderWidth !== undefined)
+            nextProps.strokeWidth = resolvedPatch.borderWidth;
+          if (resolvedPatch.borderColor !== undefined)
+            nextProps.strokeColor = resolvedPatch.borderColor;
+          if (resolvedPatch.borderOpacity !== undefined)
+            nextProps.borderOpacity = resolvedPatch.borderOpacity;
+          if (resolvedPatch.glowRadius !== undefined)
+            nextProps.glowBlur = resolvedPatch.glowRadius;
+          if (resolvedPatch.glowIntensity !== undefined)
+            nextProps.glowIntensity = resolvedPatch.glowIntensity;
+          if (resolvedPatch.glowColor !== undefined)
+            nextProps.glowColor = resolvedPatch.glowColor;
+          if (resolvedPatch.zoom !== undefined)
+            nextProps.cropZoom = resolvedPatch.zoom;
+          if (resolvedPatch.panX !== undefined) nextProps.panX = resolvedPatch.panX;
+          if (resolvedPatch.panY !== undefined) nextProps.panY = resolvedPatch.panY;
+          if (resolvedPatch.borderAnimationProgress !== undefined)
+            nextProps.borderProgress = resolvedPatch.borderAnimationProgress;
+          if (resolvedPatch.curveIntensity !== undefined)
+            nextProps.curveIntensity = resolvedPatch.curveIntensity;
           return nextProps;
         };
+
+        // If the track only has 1 base keyframe (no multi-keyframe animation), update that base keyframe directly
+        // so changing shape, size, or border never snaps back when scrubbing
+        if (track.keyframes.length === 1 && (!state.autoKeyframe || idx === 0 || patch.shape !== undefined)) {
+          const kf0 = track.keyframes[0];
+          return {
+            ...track,
+            label: resolvedPatch.name ?? track.label,
+            keyframes: [
+              {
+                ...kf0,
+                properties: applyPatchToProps(kf0.properties),
+              },
+            ],
+          };
+        }
 
         if (idx !== -1) {
           const kf = track.keyframes[idx];
@@ -2207,7 +2484,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           };
           return {
             ...track,
-            label: patch.name ?? track.label,
+            label: resolvedPatch.name ?? track.label,
             keyframes: nextKfs,
           };
         } else if (state.autoKeyframe && targetWc) {
@@ -2247,13 +2524,13 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           };
           return {
             ...track,
-            label: patch.name ?? track.label,
+            label: resolvedPatch.name ?? track.label,
             keyframes: [...track.keyframes, newKf].sort(
               (a, b) => a.frame - b.frame
             ),
           };
         }
-        return { ...track, label: patch.name ?? track.label };
+        return { ...track, label: resolvedPatch.name ?? track.label };
       });
 
       return { webcams: updatedWebcams, tracks: updatedTracks };
@@ -3074,18 +3351,275 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     get().pushHistory();
   },
 
+  selectBackgroundLayer: (layerId) =>
+    set({ selectedBackgroundLayerId: layerId }),
+
   updateBackground: (patch) => {
-    set((state) => ({
-      background: { ...state.background, ...patch },
-    }));
+    set((state) => {
+      const nextBg: SceneBackground = { ...state.background, ...patch };
+      // Also synchronize the base layer if the user updates solidColor/gradient on background directly
+      if (nextBg.layers && nextBg.layers.length > 0) {
+        const updatedLayers = [...nextBg.layers];
+        const baseIdx = 0;
+        if (patch.solidColor !== undefined && nextBg.type === 'solid') {
+          updatedLayers[baseIdx] = {
+            ...updatedLayers[baseIdx],
+            kind: 'solid',
+            color: patch.solidColor,
+          };
+        } else if (
+          patch.gradientStart !== undefined ||
+          patch.gradientEnd !== undefined ||
+          patch.gradientAngle !== undefined
+        ) {
+          updatedLayers[baseIdx] = {
+            ...updatedLayers[baseIdx],
+            kind: 'gradient',
+            gradientStart: patch.gradientStart ?? nextBg.gradientStart,
+            gradientEnd: patch.gradientEnd ?? nextBg.gradientEnd,
+            gradientAngle: patch.gradientAngle ?? nextBg.gradientAngle,
+          };
+        }
+        nextBg.layers = updatedLayers;
+      }
+      return { background: nextBg };
+    });
     get().pushHistory();
   },
 
   applyBackgroundPreset: (presetId) => {
     const found = BACKGROUND_PRESETS.find((p) => p.id === presetId);
     if (!found) return;
+    set((state) => {
+      const existingLayers =
+        state.background.layers && state.background.layers.length > 0
+          ? state.background.layers.slice(1)
+          : DEFAULT_BACKGROUND_LAYERS.slice(1);
+      const baseLayer: BackgroundLayerItem = {
+        id: 'bg-layer-base',
+        name: `${found.name} Base`,
+        kind: found.background.type === 'solid' ? 'solid' : 'gradient',
+        visible: true,
+        locked: false,
+        opacity: 1,
+        blendMode: 'normal',
+        blur: 0,
+        scale: 1,
+        positionX: 0,
+        positionY: 0,
+        rotation: 0,
+        fitMode: 'cover',
+        color: found.background.solidColor,
+        gradientType: 'linear',
+        gradientStart: found.background.gradientStart,
+        gradientEnd: found.background.gradientEnd,
+        gradientAngle: found.background.gradientAngle,
+      };
+      return {
+        background: {
+          ...found.background,
+          layers: [baseLayer, ...existingLayers],
+        },
+        selectedBackgroundLayerId: baseLayer.id,
+      };
+    });
+    get().pushHistory();
+  },
+
+  addBackgroundLayer: (layerInit) => {
+    const state = get();
+    const currentLayers =
+      state.background.layers && state.background.layers.length > 0
+        ? state.background.layers
+        : DEFAULT_BACKGROUND_LAYERS.map((l) => ({ ...l }));
+
+    const kindLabels: Record<BackgroundLayerKind, string> = {
+      solid: 'Solid Fill Layer',
+      gradient: 'Gradient Atmosphere',
+      image: 'Image Backdrop',
+      video: 'Motion Video Loop',
+      pattern: 'Geometric Pattern',
+      texture: 'Surface Texture',
+      'decorative-shape': 'Decorative Accent Shape',
+      'light-effect': 'Studio Light Effect',
+      particles: 'Ambient Particles',
+      vignette: 'Edge Vignette',
+    };
+
+    const id = `bg-layer-${Date.now().toString(36).slice(-4)}-${currentLayers.length + 1}`;
+    const newLayer: BackgroundLayerItem = {
+      id,
+      name: layerInit.name || `${kindLabels[layerInit.kind]} #${currentLayers.length + 1}`,
+      kind: layerInit.kind,
+      visible: layerInit.visible ?? true,
+      locked: layerInit.locked ?? false,
+      opacity:
+        layerInit.opacity ??
+        (layerInit.kind === 'pattern' || layerInit.kind === 'texture'
+          ? 0.22
+          : layerInit.kind === 'vignette'
+            ? 0.55
+            : 0.85),
+      blendMode:
+        layerInit.blendMode ??
+        (layerInit.kind === 'vignette'
+          ? 'multiply'
+          : layerInit.kind === 'pattern'
+            ? 'screen'
+            : 'normal'),
+      blur: layerInit.blur ?? 0,
+      scale: layerInit.scale ?? 1,
+      positionX: layerInit.positionX ?? 0,
+      positionY: layerInit.positionY ?? 0,
+      rotation: layerInit.rotation ?? 0,
+      fitMode:
+        layerInit.fitMode ??
+        (layerInit.kind === 'pattern' ? 'tile' : 'cover'),
+      color: layerInit.color ?? '#2563EB',
+      gradientType: layerInit.gradientType ?? 'linear',
+      gradientStart: layerInit.gradientStart ?? '#1E3A8A',
+      gradientEnd: layerInit.gradientEnd ?? '#0EA5E9',
+      gradientAngle: layerInit.gradientAngle ?? 135,
+      patternType: layerInit.patternType ?? 'grid',
+      patternScale: layerInit.patternScale ?? 32,
+      mediaId: layerInit.mediaId ?? null,
+      decorativeShape: layerInit.decorativeShape ?? 'glow-orb',
+      vignetteIntensity: layerInit.vignetteIntensity ?? 0.45,
+    };
+
     set({
-      background: { ...found.background },
+      background: {
+        ...state.background,
+        layers: [...currentLayers, newLayer],
+      },
+      selectedBackgroundLayerId: id,
+      lastTimelineNotice: `Added background layer "${newLayer.name}"`,
+    });
+    get().pushHistory();
+  },
+
+  updateBackgroundLayer: (layerId, patch) => {
+    set((state) => {
+      const currentLayers =
+        state.background.layers && state.background.layers.length > 0
+          ? state.background.layers
+          : DEFAULT_BACKGROUND_LAYERS.map((l) => ({ ...l }));
+      const nextLayers = currentLayers.map((l) =>
+        l.id === layerId ? { ...l, ...patch } : l
+      );
+      return {
+        background: {
+          ...state.background,
+          layers: nextLayers,
+        },
+      };
+    });
+    get().pushHistory();
+  },
+
+  removeBackgroundLayer: (layerId) => {
+    set((state) => {
+      const currentLayers =
+        state.background.layers && state.background.layers.length > 0
+          ? state.background.layers
+          : DEFAULT_BACKGROUND_LAYERS.map((l) => ({ ...l }));
+      const nextLayers = currentLayers.filter((l) => l.id !== layerId);
+      return {
+        background: {
+          ...state.background,
+          layers: nextLayers,
+        },
+        selectedBackgroundLayerId:
+          state.selectedBackgroundLayerId === layerId
+            ? nextLayers[0]?.id || null
+            : state.selectedBackgroundLayerId,
+      };
+    });
+    get().pushHistory();
+  },
+
+  duplicateBackgroundLayer: (layerId) => {
+    set((state) => {
+      const currentLayers =
+        state.background.layers && state.background.layers.length > 0
+          ? state.background.layers
+          : DEFAULT_BACKGROUND_LAYERS.map((l) => ({ ...l }));
+      const idx = currentLayers.findIndex((l) => l.id === layerId);
+      if (idx === -1) return state;
+      const orig = currentLayers[idx];
+      const copy: BackgroundLayerItem = {
+        ...JSON.parse(JSON.stringify(orig)),
+        id: `bg-layer-dup-${Date.now().toString(36).slice(-4)}`,
+        name: `${orig.name} Copy`,
+      };
+      const nextLayers = [...currentLayers];
+      nextLayers.splice(idx + 1, 0, copy);
+      return {
+        background: {
+          ...state.background,
+          layers: nextLayers,
+        },
+        selectedBackgroundLayerId: copy.id,
+      };
+    });
+    get().pushHistory();
+  },
+
+  reorderBackgroundLayer: (layerId, direction) => {
+    set((state) => {
+      const currentLayers = [
+        ...(state.background.layers && state.background.layers.length > 0
+          ? state.background.layers
+          : DEFAULT_BACKGROUND_LAYERS),
+      ];
+      const idx = currentLayers.findIndex((l) => l.id === layerId);
+      if (idx === -1) return state;
+      const [item] = currentLayers.splice(idx, 1);
+      if (direction === 'up') {
+        currentLayers.splice(Math.min(currentLayers.length, idx + 1), 0, item);
+      } else if (direction === 'down') {
+        currentLayers.splice(Math.max(0, idx - 1), 0, item);
+      } else if (direction === 'top') {
+        currentLayers.push(item);
+      } else if (direction === 'bottom') {
+        currentLayers.unshift(item);
+      }
+      return {
+        background: {
+          ...state.background,
+          layers: currentLayers,
+        },
+      };
+    });
+    get().pushHistory();
+  },
+
+  reorderSceneLayer: (kind, id, direction) => {
+    if (kind === 'device') {
+      get().reorderDeviceLayer(id, direction);
+      return;
+    }
+    set((state) => {
+      const delta =
+        direction === 'up'
+          ? 2
+          : direction === 'down'
+            ? -2
+            : direction === 'top'
+              ? 30
+              : -30;
+      if (kind === 'webcam') {
+        return {
+          webcams: state.webcams.map((w) =>
+            w.id === id ? { ...w, zIndex: Math.max(0, w.zIndex + delta) } : w
+          ),
+        };
+      }
+      return {
+        drawings: state.drawings.map((d) =>
+          d.id === id ? { ...d, zIndex: Math.max(0, d.zIndex + delta) } : d
+        ),
+      };
     });
     get().pushHistory();
   },
@@ -3498,25 +4032,976 @@ export const useStudioStore = create<StudioState>((set, get) => ({
     get().pushHistory();
   },
 
-  applyAnimationPresetToDevice: (deviceId, presetId) => {
+  updateDeviceTransitionEasing: (deviceId, easing, options) => {
     const state = get();
-    const dev = state.devices.find((d) => d.id === deviceId);
-    if (!dev) return;
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
 
-    const kfs = generateKeyframesForPreset(
-      presetId,
-      dev,
+    set((s) => {
+      const updatedDevices = s.devices.map((d) => {
+        if (!targetSet.has(d.id)) return d;
+        const resolvedCustomBezier = clampCustomBezierPoints(
+          d.activeTransitionCustomBezier || d.effects.customBezierPoints
+        );
+        return {
+          ...d,
+          activeTransitionEasing: easing,
+          activeTransitionCustomBezier: resolvedCustomBezier,
+          effects: {
+            ...d.effects,
+            entranceEasing: easing,
+            exitEasing: easing,
+            customBezierPoints: resolvedCustomBezier,
+          },
+        };
+      });
+
+      const updatedTracks = s.tracks.map((t) => {
+        if (!targetSet.has(t.targetId)) return t;
+        const dev = updatedDevices.find((d) => d.id === t.targetId);
+        const cb = dev?.activeTransitionCustomBezier;
+        return {
+          ...t,
+          keyframes: t.keyframes.map((k) => ({
+            ...k,
+            easing,
+            customBezier: cb || k.customBezier,
+          })),
+        };
+      });
+
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: `Set transition easing to ${easing} for ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  updateDeviceTransitionCustomBezier: (deviceId, customBezier, options) => {
+    const state = get();
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+    const clampedBezier = clampCustomBezierPoints(customBezier);
+
+    set((s) => {
+      const updatedDevices = s.devices.map((d) =>
+        targetSet.has(d.id)
+          ? {
+              ...d,
+              activeTransitionEasing: 'custom-path' as EasingType,
+              activeTransitionCustomBezier: clampedBezier,
+              effects: {
+                ...d.effects,
+                entranceEasing: 'custom-path' as EasingType,
+                exitEasing: 'custom-path' as EasingType,
+                customBezierPoints: clampedBezier,
+              },
+            }
+          : d
+      );
+
+      const updatedTracks = s.tracks.map((t) => {
+        if (!targetSet.has(t.targetId)) return t;
+        return {
+          ...t,
+          keyframes: t.keyframes.map((k) => ({
+            ...k,
+            easing: 'custom-path' as EasingType,
+            customBezier: clampedBezier,
+          })),
+        };
+      });
+
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: `Updated custom cubic-bezier(${clampedBezier.x1}, ${clampedBezier.y1}, ${clampedBezier.x2}, ${clampedBezier.y2}) on ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  updateDeviceTransitionDuration: (deviceId, durationMs, options) => {
+    const state = get();
+    const clampedMs = Math.max(100, Math.min(2000, Math.round(durationMs)));
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+
+    set((s) => {
+      const durFrames = Math.max(2, Math.round((clampedMs / 1000) * s.fps));
+
+      const updatedDevices = s.devices.map((d) =>
+        targetSet.has(d.id)
+          ? {
+              ...d,
+              activeTransitionDurationMs: clampedMs,
+            }
+          : d
+      );
+
+      const updatedTracks = s.tracks.map((t) => {
+        if (!targetSet.has(t.targetId)) return t;
+        const dev = updatedDevices.find((d) => d.id === t.targetId);
+        if (!dev) return t;
+
+        if (dev.activeTransitionPresetId) {
+          const sortedExisting = [...t.keyframes].sort(
+            (a, b) => a.frame - b.frame
+          );
+          const startFrame = sortedExisting[0]?.frame ?? 0;
+          const kfs = generateKeyframesForPreset(
+            dev.activeTransitionPresetId,
+            dev,
+            s.durationInFrames,
+            {
+              startFrame,
+              transitionDurationFrames: durFrames,
+              easing: dev.activeTransitionEasing || 'cubic-bezier',
+              startOpacity: dev.activeTransitionStartOpacity,
+              endOpacity: dev.activeTransitionEndOpacity,
+              loopTransition: Boolean(
+                dev.activeTransitionLoop ?? dev.effects.loopTransition
+              ),
+            }
+          );
+          return {
+            ...t,
+            keyframes: kfs,
+          };
+        }
+
+        if (t.keyframes.length >= 2) {
+          const sorted = [...t.keyframes].sort((a, b) => a.frame - b.frame);
+          const startF = sorted[0].frame;
+          const maxEnd = Math.max(startF + 2, s.durationInFrames - 1);
+          const newSettleFrame = Math.min(maxEnd, startF + durFrames);
+          const updatedKfs = sorted.map((kf, idx) =>
+            idx === 1 ? { ...kf, frame: newSettleFrame } : kf
+          );
+          return {
+            ...t,
+            keyframes: updatedKfs.sort((a, b) => a.frame - b.frame),
+          };
+        }
+
+        return t;
+      });
+
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: `Set transition duration to ${clampedMs}ms (${durFrames}f) for ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  updateDeviceTransitionOpacity: (deviceId, opacityRange, options) => {
+    const state = get();
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+
+    set((s) => {
+      const updatedDevices = s.devices.map((d) => {
+        if (!targetSet.has(d.id)) return d;
+        const nextStart =
+          opacityRange.startOpacity !== undefined
+            ? Number(
+                Math.max(0, Math.min(1, opacityRange.startOpacity)).toFixed(2)
+              )
+            : (d.activeTransitionStartOpacity ?? 0);
+        const nextEnd =
+          opacityRange.endOpacity !== undefined
+            ? Number(
+                Math.max(0, Math.min(1, opacityRange.endOpacity)).toFixed(2)
+              )
+            : (d.activeTransitionEndOpacity ?? 1);
+
+        return {
+          ...d,
+          activeTransitionStartOpacity: nextStart,
+          activeTransitionEndOpacity: nextEnd,
+          effects: {
+            ...d.effects,
+            transitionStartOpacity: nextStart,
+            transitionEndOpacity: nextEnd,
+          },
+        };
+      });
+
+      const updatedTracks = s.tracks.map((t) => {
+        if (!targetSet.has(t.targetId)) return t;
+        const dev = updatedDevices.find((d) => d.id === t.targetId);
+        if (!dev) return t;
+
+        const nextStart = dev.activeTransitionStartOpacity ?? 0;
+        const nextEnd = dev.activeTransitionEndOpacity ?? 1;
+        const durMs = dev.activeTransitionDurationMs ?? 1000;
+        const durFrames = Math.max(2, Math.round((durMs / 1000) * s.fps));
+
+        if (dev.activeTransitionPresetId) {
+          const sortedExisting = [...t.keyframes].sort(
+            (a, b) => a.frame - b.frame
+          );
+          const startFrame = sortedExisting[0]?.frame ?? 0;
+          const kfs = generateKeyframesForPreset(
+            dev.activeTransitionPresetId,
+            dev,
+            s.durationInFrames,
+            {
+              startFrame,
+              transitionDurationFrames: durFrames,
+              easing: dev.activeTransitionEasing || 'cubic-bezier',
+              startOpacity: nextStart,
+              endOpacity: nextEnd,
+              loopTransition: Boolean(
+                dev.activeTransitionLoop ?? dev.effects.loopTransition
+              ),
+            }
+          );
+          return {
+            ...t,
+            keyframes: kfs,
+          };
+        }
+
+        if (t.keyframes.length >= 2) {
+          const sorted = [...t.keyframes].sort((a, b) => a.frame - b.frame);
+          const updatedKfs = sorted.map((kf, idx) => ({
+            ...kf,
+            properties: {
+              ...kf.properties,
+              opacity: idx === 0 ? nextStart : nextEnd,
+            },
+          }));
+          return {
+            ...t,
+            keyframes: updatedKfs,
+          };
+        }
+
+        const kfs = generateKeyframesForPreset(
+          'fade',
+          dev,
+          s.durationInFrames,
+          {
+            startFrame: 0,
+            transitionDurationFrames: durFrames,
+            easing: dev.activeTransitionEasing || 'cubic-bezier',
+            startOpacity: nextStart,
+            endOpacity: nextEnd,
+          }
+        );
+        return {
+          ...t,
+          keyframes: kfs,
+        };
+      });
+
+      const targetDev = updatedDevices.find((d) => d.id === deviceId);
+      const startPct = Math.round(
+        (targetDev?.activeTransitionStartOpacity ?? 0) * 100
+      );
+      const endPct = Math.round(
+        (targetDev?.activeTransitionEndOpacity ?? 1) * 100
+      );
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: `Set transition opacity range to ${startPct}% → ${endPct}% for ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  updateDeviceTransitionMotionBlur: (deviceId, motionBlurConfig, options) => {
+    const state = get();
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+
+    set((s) => {
+      const updatedDevices = s.devices.map((d) => {
+        if (!targetSet.has(d.id)) return d;
+        const currentEnabled = Boolean(
+          d.activeTransitionMotionBlur ?? d.effects.motionBlur
+        );
+        const currentIntensity =
+          d.activeTransitionMotionBlurIntensity ??
+          d.effects.motionBlurIntensity ??
+          (currentEnabled ? 0.5 : 0);
+
+        let nextEnabled =
+          motionBlurConfig.enabled !== undefined
+            ? motionBlurConfig.enabled
+            : currentEnabled;
+        let nextIntensity =
+          motionBlurConfig.intensity !== undefined
+            ? Number(
+                Math.max(0, Math.min(1, motionBlurConfig.intensity)).toFixed(2)
+              )
+            : currentIntensity;
+
+        if (
+          motionBlurConfig.intensity !== undefined &&
+          motionBlurConfig.enabled === undefined
+        ) {
+          nextEnabled = nextIntensity > 0;
+        } else if (motionBlurConfig.enabled === true && nextIntensity <= 0) {
+          nextIntensity = 0.5;
+        } else if (
+          motionBlurConfig.enabled === false &&
+          motionBlurConfig.intensity === undefined
+        ) {
+          nextIntensity = 0;
+        }
+
+        return {
+          ...d,
+          activeTransitionMotionBlur: nextEnabled,
+          activeTransitionMotionBlurIntensity: nextIntensity,
+          effects: {
+            ...d.effects,
+            motionBlur: nextEnabled,
+            motionBlurIntensity: nextIntensity,
+          },
+        };
+      });
+
+      const targetDev = updatedDevices.find((d) => d.id === deviceId);
+      const isEnabled = Boolean(targetDev?.activeTransitionMotionBlur);
+      const intensityPct = Math.round(
+        (targetDev?.activeTransitionMotionBlurIntensity ?? 0) * 100
+      );
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: isEnabled
+          ? `Enabled Motion Blur (${intensityPct}%) on ${targetCountLabel}`
+          : `Disabled Motion Blur on ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  updateDeviceTransitionLoop: (deviceId, loop, options) => {
+    const state = get();
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+    const nextLoop = Boolean(loop);
+
+    set((s) => {
+      const updatedDevices = s.devices.map((d) => {
+        if (!targetSet.has(d.id)) return d;
+        return {
+          ...d,
+          activeTransitionLoop: nextLoop,
+          effects: {
+            ...d.effects,
+            loopTransition: nextLoop,
+          },
+        };
+      });
+
+      const updatedTracks = s.tracks.map((t) => {
+        if (!targetSet.has(t.targetId)) return t;
+        const dev = updatedDevices.find((d) => d.id === t.targetId);
+        if (!dev) return t;
+
+        const durMs = dev.activeTransitionDurationMs ?? 1000;
+        const durFrames = Math.max(2, Math.round((durMs / 1000) * s.fps));
+
+        if (dev.activeTransitionPresetId) {
+          const sortedExisting = [...t.keyframes].sort(
+            (a, b) => a.frame - b.frame
+          );
+          const startFrame = sortedExisting[0]?.frame ?? 0;
+          const kfs = generateKeyframesForPreset(
+            dev.activeTransitionPresetId,
+            dev,
+            s.durationInFrames,
+            {
+              startFrame,
+              transitionDurationFrames: durFrames,
+              easing: dev.activeTransitionEasing || 'cubic-bezier',
+              customBezier:
+                dev.activeTransitionCustomBezier ||
+                dev.effects.customBezierPoints,
+              startOpacity: dev.activeTransitionStartOpacity,
+              endOpacity: dev.activeTransitionEndOpacity,
+              loopTransition: nextLoop,
+            }
+          );
+          return {
+            ...t,
+            keyframes: kfs,
+          };
+        }
+
+        if (t.keyframes.length >= 2) {
+          const baseCycle = [...t.keyframes]
+            .filter((k) => !/-c[1-9]\d*$/.test(k.id))
+            .sort((a, b) => a.frame - b.frame);
+          if (!nextLoop || baseCycle.length < 2) {
+            return {
+              ...t,
+              keyframes: baseCycle,
+            };
+          }
+          const end = Math.max(30, s.durationInFrames - 1);
+          const startF = baseCycle[0].frame;
+          const origSpan = Math.max(
+            2,
+            baseCycle[baseCycle.length - 1].frame - startF
+          );
+          const cycleSpan = Math.max(4, Math.min(end - startF, durFrames));
+          const loopedKfs: Keyframe[] = [];
+          let cycleIndex = 0;
+          while (startF + cycleIndex * cycleSpan < end) {
+            const cycleStart = startF + cycleIndex * cycleSpan;
+            baseCycle.forEach((kf, kIdx) => {
+              const rel = (kf.frame - startF) / origSpan;
+              let targetFrame = Math.round(cycleStart + rel * cycleSpan);
+              if (cycleIndex > 0 && kIdx === 0) {
+                targetFrame = Math.min(end, cycleStart + 1);
+              }
+              if (targetFrame <= end) {
+                const nextKf: Keyframe = {
+                  ...kf,
+                  id:
+                    cycleIndex === 0
+                      ? kf.id
+                      : `kf-${dev.id}-${targetFrame}-c${cycleIndex}`,
+                  frame: targetFrame,
+                };
+                const existingIdx = loopedKfs.findIndex(
+                  (x) => x.frame === targetFrame
+                );
+                if (existingIdx !== -1) {
+                  loopedKfs[existingIdx] = nextKf;
+                } else {
+                  loopedKfs.push(nextKf);
+                }
+              }
+            });
+            cycleIndex++;
+            if (cycleIndex > 60) break;
+          }
+          return {
+            ...t,
+            keyframes: loopedKfs.sort((a, b) => a.frame - b.frame),
+          };
+        }
+
+        return t;
+      });
+
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: nextLoop
+          ? `Enabled Loop Transition on ${targetCountLabel}`
+          : `Disabled Loop Transition on ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  updateDeviceTransitionStartDelay: (deviceId, startDelayMs, options) => {
+    const state = get();
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+    const clampedDelayMs = Math.max(
+      0,
+      Math.min(5000, Math.round(Number(startDelayMs) || 0))
+    );
+    const delayFrames = computeTransitionDelayFrames(
+      clampedDelayMs,
+      state.fps,
       state.durationInFrames
     );
 
     set((s) => {
       const updatedDevices = s.devices.map((d) => {
-        if (d.id !== deviceId) return d;
+        if (!targetSet.has(d.id)) return d;
+        return {
+          ...d,
+          activeTransitionStartDelayMs: clampedDelayMs,
+          effects: {
+            ...d.effects,
+            transitionStartDelayMs: clampedDelayMs,
+          },
+        };
+      });
+
+      const updatedTracks = s.tracks.map((t) => {
+        if (!targetSet.has(t.targetId)) return t;
+        const dev = updatedDevices.find((d) => d.id === t.targetId);
+        if (!dev) return t;
+
+        const durMs = dev.activeTransitionDurationMs ?? 1000;
+        const durFrames = Math.max(2, Math.round((durMs / 1000) * s.fps));
+
+        if (dev.activeTransitionPresetId) {
+          const kfs = generateKeyframesForPreset(
+            dev.activeTransitionPresetId,
+            dev,
+            s.durationInFrames,
+            {
+              startFrame: delayFrames,
+              transitionDurationFrames: durFrames,
+              easing: dev.activeTransitionEasing || 'cubic-bezier',
+              customBezier:
+                dev.activeTransitionCustomBezier ||
+                dev.effects.customBezierPoints,
+              startOpacity: dev.activeTransitionStartOpacity,
+              endOpacity: dev.activeTransitionEndOpacity,
+              loopTransition: Boolean(
+                dev.activeTransitionLoop ?? dev.effects.loopTransition
+              ),
+            }
+          );
+          return {
+            ...t,
+            keyframes: kfs,
+          };
+        }
+
+        if (t.keyframes.length >= 2) {
+          const sortedExisting = [...t.keyframes].sort(
+            (a, b) => a.frame - b.frame
+          );
+          const oldStart = sortedExisting[0].frame;
+          const delta = delayFrames - oldStart;
+          const endLimit = Math.max(30, s.durationInFrames - 1);
+          const shifted = sortedExisting.map((kf, idx) => {
+            const nextF =
+              idx === 0
+                ? delayFrames
+                : Math.max(delayFrames + 1, Math.min(endLimit, kf.frame + delta));
+            return {
+              ...kf,
+              frame: nextF,
+            };
+          });
+          return {
+            ...t,
+            keyframes: shifted,
+          };
+        }
+
+        return t;
+      });
+
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: `Updated transition Start Delay to ${clampedDelayMs}ms (F${String(
+          delayFrames
+        ).padStart(3, '0')}) on ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  updateDeviceTransitionTransform: (deviceId, transformConfig, options) => {
+    const state = get();
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+
+    set((s) => {
+      const updatedDevices = s.devices.map((d) => {
+        if (!targetSet.has(d.id)) return d;
+        const nextRotation =
+          transformConfig.rotation !== undefined
+            ? Math.max(
+                0,
+                Math.min(360, Math.round(Number(transformConfig.rotation) || 0))
+              )
+            : (d.activeTransitionRotation ??
+                d.effects.transitionRotation ??
+                0);
+        const nextScale =
+          transformConfig.scale !== undefined
+            ? Math.max(
+                0,
+                Math.min(200, Math.round(Number(transformConfig.scale)))
+              )
+            : (d.activeTransitionScale ?? d.effects.transitionScale ?? 100);
+
+        return {
+          ...d,
+          activeTransitionRotation: nextRotation,
+          activeTransitionScale: nextScale,
+          effects: {
+            ...d.effects,
+            transitionRotation: nextRotation,
+            transitionScale: nextScale,
+          },
+        };
+      });
+
+      const updatedTracks = s.tracks.map((t) => {
+        if (!targetSet.has(t.targetId)) return t;
+        const dev = updatedDevices.find((d) => d.id === t.targetId);
+        if (!dev) return t;
+
+        const nextRot = dev.activeTransitionRotation ?? 0;
+        const nextScalePct = dev.activeTransitionScale ?? 100;
+        const durMs = dev.activeTransitionDurationMs ?? 1000;
+        const durFrames = Math.max(2, Math.round((durMs / 1000) * s.fps));
+
+        if (dev.activeTransitionPresetId) {
+          const sortedExisting = [...t.keyframes].sort(
+            (a, b) => a.frame - b.frame
+          );
+          const startFrame = sortedExisting[0]?.frame ?? 0;
+          const kfs = generateKeyframesForPreset(
+            dev.activeTransitionPresetId,
+            dev,
+            s.durationInFrames,
+            {
+              startFrame,
+              transitionDurationFrames: durFrames,
+              easing: dev.activeTransitionEasing || 'cubic-bezier',
+              customBezier:
+                dev.activeTransitionCustomBezier ||
+                dev.effects.customBezierPoints,
+              startOpacity: dev.activeTransitionStartOpacity,
+              endOpacity: dev.activeTransitionEndOpacity,
+              transitionRotation: nextRot,
+              transitionScale: nextScalePct,
+              loopTransition: Boolean(
+                dev.activeTransitionLoop ?? dev.effects.loopTransition
+              ),
+            }
+          );
+          return {
+            ...t,
+            keyframes: kfs,
+          };
+        }
+
+        const scaleMult = Number((nextScalePct / 100).toFixed(3));
+        const baseRot = dev.rotation || 0;
+        const baseSX = dev.scaleX || 1;
+        const baseSY = dev.scaleY || 1;
+        const scaledSX = Number((baseSX * scaleMult).toFixed(3));
+        const scaledSY = Number((baseSY * scaleMult).toFixed(3));
+
+        if (t.keyframes.length >= 2) {
+          const sorted = [...t.keyframes].sort((a, b) => a.frame - b.frame);
+          const updatedKfs = sorted.map((kf, idx) => ({
+            ...kf,
+            properties: {
+              ...kf.properties,
+              rotation: idx === 0 ? baseRot + nextRot : baseRot,
+              scaleX: idx === 0 ? scaledSX : baseSX,
+              scaleY: idx === 0 ? scaledSY : baseSY,
+            },
+          }));
+          return {
+            ...t,
+            keyframes: updatedKfs,
+          };
+        }
+
+        const delayFrames = computeTransitionDelayFrames(
+          dev.activeTransitionStartDelayMs ??
+            dev.effects.transitionStartDelayMs ??
+            0,
+          s.fps,
+          s.durationInFrames
+        );
+        const kfs = generateKeyframesForPreset(
+          'fade',
+          dev,
+          s.durationInFrames,
+          {
+            startFrame: delayFrames,
+            transitionDurationFrames: durFrames,
+            easing: dev.activeTransitionEasing || 'cubic-bezier',
+            customBezier:
+              dev.activeTransitionCustomBezier ||
+              dev.effects.customBezierPoints,
+            startOpacity: dev.activeTransitionStartOpacity ?? 0,
+            endOpacity: dev.activeTransitionEndOpacity ?? 1,
+            transitionRotation: nextRot,
+            transitionScale: nextScalePct,
+            loopTransition: Boolean(
+              dev.activeTransitionLoop ?? dev.effects.loopTransition
+            ),
+          }
+        );
+        return {
+          ...t,
+          keyframes: kfs,
+        };
+      });
+
+      const targetDev = updatedDevices.find((d) => d.id === deviceId);
+      const rotLabel = `${targetDev?.activeTransitionRotation ?? 0}°`;
+      const scaleLabel = `${targetDev?.activeTransitionScale ?? 100}%`;
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: `Updated transition Rotation (${rotLabel}) & Scale (${scaleLabel}) on ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  applyAnimationPresetToDevice: (deviceId, presetId, options) => {
+    const state = get();
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+
+    const targetDevices = state.devices.filter((d) =>
+      targetDeviceIds.includes(d.id)
+    );
+    if (targetDevices.length === 0) return;
+
+    const presetMeta = DEVICE_TRANSITION_PRESETS.find((p) => p.id === presetId);
+    const resolvedEasing =
+      options?.easing ?? presetMeta?.defaultEasing ?? 'cubic-bezier';
+    const resolvedCustomBezier = clampCustomBezierPoints(
+      options?.customBezier ??
+        targetDevices[0]?.activeTransitionCustomBezier ??
+        targetDevices[0]?.effects.customBezierPoints
+    );
+    const resolvedStartDelayMs = Math.max(
+      0,
+      Math.min(
+        5000,
+        Math.round(
+          options?.startDelayMs ??
+            targetDevices[0]?.activeTransitionStartDelayMs ??
+            targetDevices[0]?.effects.transitionStartDelayMs ??
+            0
+        )
+      )
+    );
+    const delayFrames = computeTransitionDelayFrames(
+      resolvedStartDelayMs,
+      state.fps,
+      state.durationInFrames
+    );
+    const timingMode = options?.timingMode ?? 'from-start';
+    const baseStartFrame =
+      timingMode === 'at-playhead'
+        ? Math.min(state.durationInFrames - 12, state.currentFrame + delayFrames)
+        : delayFrames;
+    const defaultFrames = presetMeta?.defaultDurationFrames ?? 30;
+    const defaultMs = Math.max(
+      100,
+      Math.min(2000, Math.round((defaultFrames / state.fps) * 1000))
+    );
+    const resolvedDurationMs = Math.max(
+      100,
+      Math.min(
+        2000,
+        options?.transitionDurationMs ??
+          (options?.transitionDurationFrames !== undefined
+            ? Math.round((options.transitionDurationFrames / state.fps) * 1000)
+            : targetDevices[0]?.activeTransitionDurationMs ?? defaultMs)
+      )
+    );
+    const baseDurFrames =
+      timingMode === 'full-timeline'
+        ? Math.max(30, state.durationInFrames - 1 - baseStartFrame)
+        : options?.transitionDurationFrames ??
+          Math.max(2, Math.round((resolvedDurationMs / 1000) * state.fps));
+    const staggerFrames = options?.staggerFrames ?? 6;
+    const isExitPreset =
+      presetId === 'fade-out' ||
+      presetId === 'slide-out' ||
+      presetId === 'zoom-punch-out';
+    const defaultPresetStartOp = isExitPreset ? 1 : 0;
+    const defaultPresetEndOp = isExitPreset ? 0 : 1;
+    const resolvedStartOpacity =
+      options?.startOpacity !== undefined
+        ? Number(Math.max(0, Math.min(1, options.startOpacity)).toFixed(2))
+        : (targetDevices[0]?.activeTransitionStartOpacity ??
+            defaultPresetStartOp);
+    const resolvedEndOpacity =
+      options?.endOpacity !== undefined
+        ? Number(Math.max(0, Math.min(1, options.endOpacity)).toFixed(2))
+        : (targetDevices[0]?.activeTransitionEndOpacity ?? defaultPresetEndOp);
+    const resolvedTransitionRotation =
+      options?.transitionRotation !== undefined
+        ? Math.max(0, Math.min(360, Math.round(options.transitionRotation)))
+        : (targetDevices[0]?.activeTransitionRotation ??
+            targetDevices[0]?.effects.transitionRotation ??
+            0);
+    const resolvedTransitionScale =
+      options?.transitionScale !== undefined
+        ? Math.max(0, Math.min(200, Math.round(options.transitionScale)))
+        : (targetDevices[0]?.activeTransitionScale ??
+            targetDevices[0]?.effects.transitionScale ??
+            100);
+    const resolvedMotionBlur =
+      options?.motionBlur !== undefined
+        ? options.motionBlur
+        : Boolean(
+            targetDevices[0]?.activeTransitionMotionBlur ??
+              targetDevices[0]?.effects.motionBlur
+          );
+    const resolvedMotionBlurIntensity =
+      options?.motionBlurIntensity !== undefined
+        ? Number(
+            Math.max(0, Math.min(1, options.motionBlurIntensity)).toFixed(2)
+          )
+        : (targetDevices[0]?.activeTransitionMotionBlurIntensity ??
+            targetDevices[0]?.effects.motionBlurIntensity ??
+            (resolvedMotionBlur ? 0.5 : 0));
+    const resolvedLoop =
+      options?.loopTransition !== undefined
+        ? Boolean(options.loopTransition)
+        : Boolean(
+            targetDevices[0]?.activeTransitionLoop ??
+              targetDevices[0]?.effects.loopTransition ??
+              false
+          );
+
+    set((s) => {
+      const targetSet = new Set(targetDeviceIds);
+      const updatedDevices = s.devices.map((d) => {
+        if (!targetSet.has(d.id)) return d;
+        const baseDev: SceneDeviceObject = {
+          ...d,
+          activeTransitionPresetId: presetId,
+          activeTransitionEasing: resolvedEasing,
+          activeTransitionCustomBezier: resolvedCustomBezier,
+          activeTransitionDurationMs: resolvedDurationMs,
+          activeTransitionStartDelayMs: resolvedStartDelayMs,
+          activeTransitionStartOpacity: resolvedStartOpacity,
+          activeTransitionEndOpacity: resolvedEndOpacity,
+          activeTransitionRotation: resolvedTransitionRotation,
+          activeTransitionScale: resolvedTransitionScale,
+          activeTransitionMotionBlur: resolvedMotionBlur,
+          activeTransitionMotionBlurIntensity: resolvedMotionBlurIntensity,
+          activeTransitionLoop: resolvedLoop,
+          effects: {
+            ...d.effects,
+            entranceEasing: resolvedEasing,
+            exitEasing: resolvedEasing,
+            customBezierPoints: resolvedCustomBezier,
+            transitionStartDelayMs: resolvedStartDelayMs,
+            transitionStartOpacity: resolvedStartOpacity,
+            transitionEndOpacity: resolvedEndOpacity,
+            transitionRotation: resolvedTransitionRotation,
+            transitionScale: resolvedTransitionScale,
+            motionBlur: resolvedMotionBlur,
+            motionBlurIntensity: resolvedMotionBlurIntensity,
+            loopTransition: resolvedLoop,
+          },
+        };
         if (presetId === 'neon-border-sweep') {
           return {
-            ...d,
+            ...baseDev,
             effects: {
-              ...d.effects,
+              ...baseDev.effects,
               glowEnabled: true,
               animatedGlow: true,
               glowAnimationMode: 'perimeter-sweep' as const,
@@ -3525,43 +5010,570 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         }
         if (presetId === 'glow-pulse') {
           return {
-            ...d,
+            ...baseDev,
             effects: {
-              ...d.effects,
+              ...baseDev.effects,
               glowEnabled: true,
               animatedGlow: true,
               glowAnimationMode: 'pulse' as const,
             },
           };
         }
-        return d;
+        return baseDev;
       });
 
-      const existingTrack = s.tracks.find((t) => t.targetId === deviceId);
-      const updatedTracks = existingTrack
-        ? s.tracks.map((t) =>
-            t.id === existingTrack.id ? { ...t, keyframes: kfs } : t
-          )
-        : [
-            ...s.tracks,
-            {
-              id: `track-${deviceId}`,
-              targetId: deviceId,
-              label: dev.name,
-              type: 'device' as const,
-              visible: true,
-              locked: false,
-              keyframes: kfs,
-            },
-          ];
+      let updatedTracks = [...s.tracks];
+      targetDevices.forEach((dev, idx) => {
+        const devStartFrame = Math.min(
+          s.durationInFrames - 10,
+          baseStartFrame + idx * staggerFrames
+        );
+        const kfs = generateKeyframesForPreset(
+          presetId,
+          dev,
+          s.durationInFrames,
+          {
+            startFrame: devStartFrame,
+            transitionDurationFrames: baseDurFrames,
+            easing: resolvedEasing,
+            customBezier: resolvedCustomBezier,
+            startOpacity: resolvedStartOpacity,
+            endOpacity: resolvedEndOpacity,
+            transitionRotation:
+              resolvedTransitionRotation !== 0
+                ? resolvedTransitionRotation
+                : undefined,
+            transitionScale:
+              resolvedTransitionScale !== 100
+                ? resolvedTransitionScale
+                : undefined,
+            loopTransition: resolvedLoop,
+          }
+        );
+
+        const existingTrackIdx = updatedTracks.findIndex(
+          (t) => t.targetId === dev.id
+        );
+        if (existingTrackIdx !== -1) {
+          updatedTracks[existingTrackIdx] = {
+            ...updatedTracks[existingTrackIdx],
+            keyframes: kfs,
+          };
+        } else {
+          updatedTracks.push({
+            id: `track-${dev.id}`,
+            targetId: dev.id,
+            label: dev.name,
+            type: 'device' as const,
+            visible: true,
+            locked: false,
+            keyframes: kfs,
+          });
+        }
+      });
+
+      const labelName = presetMeta ? presetMeta.name : presetId;
+      const targetCountLabel =
+        targetDevices.length > 1
+          ? `${targetDevices.length} selected devices`
+          : `"${targetDevices[0].name}"`;
 
       return {
         devices: updatedDevices,
         tracks: updatedTracks,
-        currentFrame: 0,
+        currentFrame: baseStartFrame,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: `Applied "${labelName}" (${resolvedEasing} · ${resolvedDurationMs}ms${
+          resolvedStartDelayMs > 0 ? ` · +${resolvedStartDelayMs}ms delay` : ''
+        } · ${Math.round(
+          resolvedStartOpacity * 100
+        )}%→${Math.round(
+          resolvedEndOpacity * 100
+        )}%${resolvedLoop ? ' · Loop' : ''}) to ${targetCountLabel} (F${String(
+          baseStartFrame
+        ).padStart(3, '0')} · ${baseDurFrames}f)`,
       };
     });
     get().pushHistory();
+  },
+
+  resetDeviceTransition: (deviceId, options) => {
+    const state = get();
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+
+    set((s) => {
+      const updatedDevices = s.devices.map((d) => {
+        if (!targetSet.has(d.id)) return d;
+        const wasGlowPreset =
+          d.activeTransitionPresetId === 'neon-border-sweep' ||
+          d.activeTransitionPresetId === 'glow-pulse';
+        const defaultCb = clampCustomBezierPoints();
+        return {
+          ...d,
+          activeTransitionPresetId: undefined,
+          activeTransitionEasing: 'linear' as EasingType,
+          activeTransitionCustomBezier: defaultCb,
+          activeTransitionDurationMs: 1000,
+          activeTransitionStartDelayMs: 0,
+          activeTransitionStartOpacity: 0,
+          activeTransitionEndOpacity: 1,
+          activeTransitionRotation: 0,
+          activeTransitionScale: 100,
+          activeTransitionMotionBlur: false,
+          activeTransitionMotionBlurIntensity: 0,
+          activeTransitionLoop: false,
+          effects: {
+            ...d.effects,
+            entranceAnimation: 'none' as const,
+            exitAnimation: 'none' as const,
+            entranceEasing: 'linear' as EasingType,
+            exitEasing: 'linear' as EasingType,
+            customBezierPoints: defaultCb,
+            transitionStartDelayMs: 0,
+            transitionStartOpacity: undefined,
+            transitionEndOpacity: undefined,
+            transitionRotation: 0,
+            transitionScale: 100,
+            motionBlur: false,
+            motionBlurIntensity: 0,
+            loopTransition: false,
+            animatedGlow: wasGlowPreset ? false : d.effects.animatedGlow,
+            glowAnimationMode: wasGlowPreset
+              ? ('none' as const)
+              : d.effects.glowAnimationMode,
+          },
+        };
+      });
+
+      const updatedTracks = s.tracks.map((t) => {
+        if (!targetSet.has(t.targetId)) return t;
+        const dev = s.devices.find((d) => d.id === t.targetId);
+        if (!dev) return t;
+        const baseKf: Keyframe = {
+          id: `kf-${dev.id}-0`,
+          frame: 0,
+          easing: 'linear',
+          properties: {
+            x: dev.x,
+            y: dev.y,
+            scaleX: dev.scaleX,
+            scaleY: dev.scaleY,
+            rotation: dev.rotation,
+            opacity: dev.opacity,
+            glowBlur: dev.effects.glowBlur,
+            glowIntensity: dev.effects.glowIntensity,
+            glowColor: dev.effects.glowColor,
+            rotation3DX: dev.rotation3DX,
+            rotation3DY: dev.rotation3DY,
+            rotation3DZ: dev.rotation3DZ,
+          },
+        };
+        return {
+          ...t,
+          keyframes: [baseKf],
+        };
+      });
+
+      const targetCountLabel =
+        targetDeviceIds.length > 1
+          ? `${targetDeviceIds.length} selected devices`
+          : `"${s.devices.find((d) => d.id === deviceId)?.name || 'Device'}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        selectedKeyframe: null,
+        isPlaying: false,
+        lastTimelineNotice: `Reset transition effects and set easing to linear for ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  copyDeviceTransition: (deviceId, overrides) => {
+    const state = get();
+    const sourceDev =
+      state.devices.find((d) => d.id === deviceId) ||
+      state.devices.find((d) => state.selectedIds.includes(d.id)) ||
+      state.devices[0];
+    if (!sourceDev) return;
+
+    const devTrack = state.tracks.find((t) => t.targetId === sourceDev.id);
+    const devKfs = devTrack ? devTrack.keyframes : [];
+
+    const resolvedPresetId: AnimationPresetId | null =
+      overrides?.presetId !== undefined
+        ? overrides.presetId
+        : (sourceDev.activeTransitionPresetId ?? null);
+    const resolvedDurationMs = Math.max(
+      100,
+      Math.min(
+        2000,
+        Math.round(
+          overrides?.durationMs ?? sourceDev.activeTransitionDurationMs ?? 1000
+        )
+      )
+    );
+    const resolvedEasing: EasingType =
+      overrides?.easing ??
+      sourceDev.activeTransitionEasing ??
+      devKfs.find((k) => k.frame > 0)?.easing ??
+      devKfs[0]?.easing ??
+      sourceDev.effects.entranceEasing ??
+      'cubic-bezier';
+    const resolvedCustomBezier = clampCustomBezierPoints(
+      overrides?.customBezier ??
+        sourceDev.activeTransitionCustomBezier ??
+        sourceDev.effects.customBezierPoints
+    );
+    const resolvedStartOpacity = Number(
+      Math.max(
+        0,
+        Math.min(
+          1,
+          overrides?.startOpacity ??
+            sourceDev.activeTransitionStartOpacity ??
+            sourceDev.effects.transitionStartOpacity ??
+            0
+        )
+      ).toFixed(2)
+    );
+    const resolvedEndOpacity = Number(
+      Math.max(
+        0,
+        Math.min(
+          1,
+          overrides?.endOpacity ??
+            sourceDev.activeTransitionEndOpacity ??
+            sourceDev.effects.transitionEndOpacity ??
+            1
+        )
+      ).toFixed(2)
+    );
+    const resolvedMotionBlur = Boolean(
+      overrides?.motionBlur ??
+        sourceDev.activeTransitionMotionBlur ??
+        sourceDev.effects.motionBlur ??
+        false
+    );
+    const rawMbIntensity = Number(
+      Math.max(
+        0,
+        Math.min(
+          1,
+          overrides?.motionBlurIntensity ??
+            sourceDev.activeTransitionMotionBlurIntensity ??
+            sourceDev.effects.motionBlurIntensity ??
+            (resolvedMotionBlur ? 0.5 : 0)
+        )
+      ).toFixed(2)
+    );
+    const resolvedMotionBlurIntensity = resolvedMotionBlur
+      ? rawMbIntensity > 0
+        ? rawMbIntensity
+        : 0.5
+      : 0;
+    const resolvedLoopTransition = Boolean(
+      overrides?.loopTransition ??
+        sourceDev.activeTransitionLoop ??
+        sourceDev.effects.loopTransition ??
+        false
+    );
+    const resolvedStartDelayMs = Math.max(
+      0,
+      Math.min(
+        5000,
+        Math.round(
+          overrides?.startDelayMs ??
+            sourceDev.activeTransitionStartDelayMs ??
+            sourceDev.effects.transitionStartDelayMs ??
+            0
+        )
+      )
+    );
+    const resolvedRotation = Math.max(
+      0,
+      Math.min(
+        360,
+        Math.round(
+          overrides?.rotation ??
+            sourceDev.activeTransitionRotation ??
+            sourceDev.effects.transitionRotation ??
+            0
+        )
+      )
+    );
+    const resolvedScale = Math.max(
+      0,
+      Math.min(
+        200,
+        Math.round(
+          overrides?.scale ??
+            sourceDev.activeTransitionScale ??
+            sourceDev.effects.transitionScale ??
+            100
+        )
+      )
+    );
+    const resolvedEntranceAnimation =
+      overrides?.entranceAnimation ??
+      sourceDev.effects.entranceAnimation ??
+      'none';
+    const resolvedExitAnimation =
+      overrides?.exitAnimation ?? sourceDev.effects.exitAnimation ?? 'none';
+
+    const copied: CopiedDeviceTransition = {
+      presetId: resolvedPresetId,
+      durationMs: resolvedDurationMs,
+      startDelayMs: resolvedStartDelayMs,
+      easing: resolvedEasing,
+      customBezier: resolvedCustomBezier,
+      startOpacity: resolvedStartOpacity,
+      endOpacity: resolvedEndOpacity,
+      rotation: resolvedRotation,
+      scale: resolvedScale,
+      motionBlur: resolvedMotionBlur,
+      motionBlurIntensity: resolvedMotionBlurIntensity,
+      loopTransition: resolvedLoopTransition,
+      entranceAnimation: resolvedEntranceAnimation,
+      exitAnimation: resolvedExitAnimation,
+      sourceDeviceId: sourceDev.id,
+      sourceDeviceName: sourceDev.name,
+      copiedAt: Date.now(),
+    };
+
+    const presetMeta = resolvedPresetId
+      ? DEVICE_TRANSITION_PRESETS.find((p) => p.id === resolvedPresetId)
+      : null;
+    const presetLabel = presetMeta
+      ? presetMeta.name
+      : resolvedPresetId || 'Custom';
+
+    set((s) => ({
+      copiedTransition: copied,
+      devices: s.devices.map((d) =>
+        d.id === sourceDev.id
+          ? {
+              ...d,
+              activeTransitionPresetId:
+                resolvedPresetId ?? d.activeTransitionPresetId,
+              activeTransitionDurationMs: resolvedDurationMs,
+              activeTransitionStartDelayMs: resolvedStartDelayMs,
+              activeTransitionEasing: resolvedEasing,
+              activeTransitionCustomBezier: resolvedCustomBezier,
+              activeTransitionStartOpacity: resolvedStartOpacity,
+              activeTransitionEndOpacity: resolvedEndOpacity,
+              activeTransitionRotation: resolvedRotation,
+              activeTransitionScale: resolvedScale,
+              activeTransitionMotionBlur: resolvedMotionBlur,
+              activeTransitionMotionBlurIntensity: resolvedMotionBlurIntensity,
+              activeTransitionLoop: resolvedLoopTransition,
+            }
+          : d
+      ),
+      lastTimelineNotice: `Copied transition (${presetLabel} · ${resolvedDurationMs}ms${
+        resolvedStartDelayMs > 0 ? ` · +${resolvedStartDelayMs}ms delay` : ''
+      } · ${resolvedEasing} · ${Math.round(
+        resolvedStartOpacity * 100
+      )}%→${Math.round(resolvedEndOpacity * 100)}% · Rot ${resolvedRotation}° · Scale ${resolvedScale}% · Blur ${
+        resolvedMotionBlur
+          ? `${Math.round(resolvedMotionBlurIntensity * 100)}%`
+          : 'Off'
+      }${resolvedLoopTransition ? ' · Loop' : ''}) from "${sourceDev.name}"`,
+    }));
+  },
+
+  pasteDeviceTransition: (deviceId, options) => {
+    const state = get();
+    const copied = state.copiedTransition;
+    if (!copied) return;
+
+    const applyAll = options?.applyToAllSelected ?? true;
+    const targetDeviceIds =
+      applyAll &&
+      state.selectedIds.length > 0 &&
+      state.selectedIds.includes(deviceId)
+        ? state.selectedIds
+        : [deviceId];
+    const targetSet = new Set(targetDeviceIds);
+    const targetDevices = state.devices.filter((d) => targetSet.has(d.id));
+    if (targetDevices.length === 0) return;
+
+    const durFrames = Math.max(
+      2,
+      Math.round((copied.durationMs / 1000) * state.fps)
+    );
+    const nextStartDelayMs = Math.max(
+      0,
+      Math.min(5000, Math.round(copied.startDelayMs ?? 0))
+    );
+    const delayFrames = computeTransitionDelayFrames(
+      nextStartDelayMs,
+      state.fps,
+      state.durationInFrames
+    );
+    const nextRotation = Math.max(
+      0,
+      Math.min(360, Math.round(copied.rotation ?? 0))
+    );
+    const nextScale = Math.max(
+      0,
+      Math.min(200, Math.round(copied.scale ?? 100))
+    );
+    const nextMbIntensity = copied.motionBlur ? copied.motionBlurIntensity : 0;
+    const nextLoop = Boolean(copied.loopTransition);
+    const nextCustomBezier = clampCustomBezierPoints(copied.customBezier);
+
+    set((s) => {
+      const updatedDevices = s.devices.map((d) => {
+        if (!targetSet.has(d.id)) return d;
+        const baseDev: SceneDeviceObject = {
+          ...d,
+          activeTransitionPresetId: copied.presetId ?? undefined,
+          activeTransitionDurationMs: copied.durationMs,
+          activeTransitionStartDelayMs: nextStartDelayMs,
+          activeTransitionEasing: copied.easing,
+          activeTransitionCustomBezier: nextCustomBezier,
+          activeTransitionStartOpacity: copied.startOpacity,
+          activeTransitionEndOpacity: copied.endOpacity,
+          activeTransitionRotation: nextRotation,
+          activeTransitionScale: nextScale,
+          activeTransitionMotionBlur: copied.motionBlur,
+          activeTransitionMotionBlurIntensity: nextMbIntensity,
+          activeTransitionLoop: nextLoop,
+          effects: {
+            ...d.effects,
+            entranceAnimation:
+              copied.entranceAnimation ?? d.effects.entranceAnimation,
+            exitAnimation: copied.exitAnimation ?? d.effects.exitAnimation,
+            entranceEasing: copied.easing,
+            exitEasing: copied.easing,
+            customBezierPoints: nextCustomBezier,
+            transitionStartDelayMs: nextStartDelayMs,
+            transitionStartOpacity: copied.startOpacity,
+            transitionEndOpacity: copied.endOpacity,
+            transitionRotation: nextRotation,
+            transitionScale: nextScale,
+            motionBlur: copied.motionBlur,
+            motionBlurIntensity: nextMbIntensity,
+            loopTransition: nextLoop,
+          },
+        };
+        if (copied.presetId === 'neon-border-sweep') {
+          return {
+            ...baseDev,
+            effects: {
+              ...baseDev.effects,
+              glowEnabled: true,
+              animatedGlow: true,
+              glowAnimationMode: 'perimeter-sweep' as const,
+            },
+          };
+        }
+        if (copied.presetId === 'glow-pulse') {
+          return {
+            ...baseDev,
+            effects: {
+              ...baseDev.effects,
+              glowEnabled: true,
+              animatedGlow: true,
+              glowAnimationMode: 'pulse' as const,
+            },
+          };
+        }
+        return baseDev;
+      });
+
+      const updatedTracks = [...s.tracks];
+      targetDevices.forEach((dev) => {
+        const effectivePreset: AnimationPresetId = copied.presetId ?? 'fade';
+        const kfs = generateKeyframesForPreset(
+          effectivePreset,
+          dev,
+          s.durationInFrames,
+          {
+            startFrame: delayFrames,
+            transitionDurationFrames: durFrames,
+            easing: copied.easing,
+            customBezier: nextCustomBezier,
+            startOpacity: copied.startOpacity,
+            endOpacity: copied.endOpacity,
+            transitionRotation: nextRotation !== 0 ? nextRotation : undefined,
+            transitionScale: nextScale !== 100 ? nextScale : undefined,
+            loopTransition: nextLoop,
+          }
+        );
+
+        const existingTrackIdx = updatedTracks.findIndex(
+          (t) => t.targetId === dev.id
+        );
+        if (existingTrackIdx !== -1) {
+          updatedTracks[existingTrackIdx] = {
+            ...updatedTracks[existingTrackIdx],
+            keyframes: kfs,
+          };
+        } else {
+          updatedTracks.push({
+            id: `track-${dev.id}`,
+            targetId: dev.id,
+            label: dev.name,
+            type: 'device' as const,
+            visible: true,
+            locked: false,
+            keyframes: kfs,
+          });
+        }
+      });
+
+      const presetMeta = copied.presetId
+        ? DEVICE_TRANSITION_PRESETS.find((p) => p.id === copied.presetId)
+        : null;
+      const presetLabel = presetMeta
+        ? presetMeta.name
+        : copied.presetId || 'Custom';
+      const targetCountLabel =
+        targetDevices.length > 1
+          ? `${targetDevices.length} selected devices`
+          : `"${targetDevices[0].name}"`;
+
+      return {
+        devices: updatedDevices,
+        tracks: updatedTracks,
+        isPlaying: options?.autoPlay ? true : s.isPlaying,
+        lastTimelineNotice: `Pasted transition (${presetLabel} · ${copied.durationMs}ms · ${copied.easing} · ${Math.round(
+          copied.startOpacity * 100
+        )}%→${Math.round(copied.endOpacity * 100)}% · Blur ${
+          copied.motionBlur ? `${Math.round(nextMbIntensity * 100)}%` : 'Off'
+        }${nextLoop ? ' · Loop' : ''}) onto ${targetCountLabel}`,
+      };
+    });
+    get().pushHistory();
+  },
+
+  toggleFavoriteTransitionPreset: (presetId) => {
+    set((s) => {
+      const exists = s.favoriteTransitionPresetIds.includes(presetId);
+      const nextFavorites = exists
+        ? s.favoriteTransitionPresetIds.filter((id) => id !== presetId)
+        : [...s.favoriteTransitionPresetIds, presetId];
+      const presetMeta = DEVICE_TRANSITION_PRESETS.find(
+        (p) => p.id === presetId
+      );
+      const presetName = presetMeta ? presetMeta.name : presetId;
+      return {
+        favoriteTransitionPresetIds: nextFavorites,
+        lastTimelineNotice: exists
+          ? `Removed "${presetName}" from Favorites`
+          : `Saved "${presetName}" to Favorites`,
+      };
+    });
   },
 
   applySceneTemplate: (templateId) => {
@@ -4004,6 +6016,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       selectedIds: [devId],
       selectedDrawingId: null,
       selectedClipId: null,
+      copiedTransition: null,
       currentFrame: 0,
       isPlaying: false,
     });

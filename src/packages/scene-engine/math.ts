@@ -2299,6 +2299,11 @@ export interface SnapResult {
   guidesY: number[];
 }
 
+export function snapValueToGrid(val: number, gridSize: number): number {
+  const safeGrid = Math.max(4, Math.round(gridSize || 40));
+  return Math.round(val / safeGrid) * safeGrid;
+}
+
 export function computeSnapPosition(
   x: number,
   y: number,
@@ -2306,7 +2311,7 @@ export function computeSnapPosition(
   canvasHeight: number,
   otherCenters: { x: number; y: number }[],
   snapToGrid: boolean,
-  gridSize = 20,
+  gridSize = 40,
   threshold = 8
 ): SnapResult {
   let snappedX = x;
@@ -2314,6 +2319,7 @@ export function computeSnapPosition(
   const guidesX: number[] = [];
   const guidesY: number[] = [];
 
+  const safeGrid = Math.max(4, Math.round(gridSize || 40));
   const centerX = canvasWidth / 2;
   const centerY = canvasHeight / 2;
 
@@ -2338,10 +2344,10 @@ export function computeSnapPosition(
   }
 
   if (snapToGrid && guidesX.length === 0) {
-    snappedX = Math.round(snappedX / gridSize) * gridSize;
+    snappedX = Math.round(snappedX / safeGrid) * safeGrid;
   }
   if (snapToGrid && guidesY.length === 0) {
-    snappedY = Math.round(snappedY / gridSize) * gridSize;
+    snappedY = Math.round(snappedY / safeGrid) * safeGrid;
   }
 
   return { x: snappedX, y: snappedY, guidesX, guidesY };

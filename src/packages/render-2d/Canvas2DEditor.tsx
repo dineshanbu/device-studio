@@ -4,6 +4,7 @@ import {
   Circle,
   Copy,
   Eraser,
+  Grid3X3,
   Hexagon,
   Maximize2,
   MessageSquare,
@@ -14,6 +15,8 @@ import {
   Pencil,
   RectangleHorizontal,
   RotateCw,
+  Ruler,
+  Scan,
   Spline,
   Square,
   Trash2,
@@ -37,6 +40,9 @@ import type {
   SceneDrawingObject,
   SceneWebcamOverlay,
 } from '../shared/types.ts';
+import { ViewportContextMenu } from '../editor/ViewportContextMenu.tsx';
+import { ViewportRulers } from '../editor/ViewportRulers.tsx';
+import { ViewportZoomSlider } from '../editor/ViewportZoomSlider.tsx';
 import { renderSceneFrame2D } from './renderFrame2D.ts';
 
 type DrawingResizeHandle = 'nw' | 'ne' | 'se' | 'sw' | 'n' | 'e' | 's' | 'w';
@@ -56,6 +62,23 @@ type InteractionMode =
       startMouseX: number;
       startMouseY: number;
       initialPositions: Record<string, { x: number; y: number }>;
+      initialDrawingPositions?: Record<string, { x: number; y: number }>;
+      initialWebcamPositions?: Record<string, { x: number; y: number }>;
+    }
+  | {
+      type: 'marquee';
+      startX: number;
+      startY: number;
+      currentX: number;
+      currentY: number;
+      startClientX: number;
+      startClientY: number;
+      currentClientX: number;
+      currentClientY: number;
+      additive: boolean;
+      initialDeviceIds: string[];
+      initialDrawingIds: string[];
+      initialWebcamIds: string[];
     }
   | {
       type: 'drag-webcam';
@@ -160,7 +183,9 @@ export const Canvas2DEditor: React.FC = () => {
     background,
     selectedIds,
     selectedDrawingId,
+    selectedDrawingIds,
     selectedWebcamId,
+    selectedWebcamIds,
     activeDrawingTool,
     drawingDefaults,
     currentFrame,
@@ -171,12 +196,16 @@ export const Canvas2DEditor: React.FC = () => {
     panX,
     panY,
     snapToGrid,
+    gridSize,
     showGuides,
     showRulers,
+    setShowRulers,
+    isPreviewMode,
     showMotionTrail,
     selectDevice,
     selectDrawing,
     selectWebcam,
+    setMarqueeSelection,
     updateDevice,
     updateDrawing,
     updateWebcam,
@@ -185,15 +214,25 @@ export const Canvas2DEditor: React.FC = () => {
     duplicateDrawing,
     deleteWebcam,
     deleteSelectedDevices,
+    duplicateSelectedDevices,
+    groupSelectedDevices,
     setActiveDrawingTool,
     setCurrentFrame,
     setZoomAndPan,
+    toggleSnapToGrid,
+    setGridSize,
+    snapSelectedToGrid,
     pushHistory,
   } = useStudioStore();
 
-  const [interaction, setInteraction] = useState<InteractionMode>({
+  const [interaction, setInteractionState] = useState<InteractionMode>({
     type: 'none',
   });
+  const interactionRef = useRef<InteractionMode>({ type: 'none' });
+  const setInteraction = (next: InteractionMode) => {
+    interactionRef.current = next;
+    setInteractionState(next);
+  };
   const [activeGuides, setActiveGuides] = useState<{
     x: number[];
     y: number[];
@@ -205,6 +244,12 @@ export const Canvas2DEditor: React.FC = () => {
     x: 0,
     y: 0,
   });
+  const [contextMenu, setContextMenu] = useState<{
+    clientX: number;
+    clientY: number;
+    stageX: number;
+    stageY: number;
+  } | null>(null);
 
   // Keyboard shortcuts for Drawing Tool UX: Escape to cancel/deselect, Delete/Backspace to delete, single-key tool switching
   useEffect(() => {
@@ -256,6 +301,7 @@ export const Canvas2DEditor: React.FC = () => {
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         const key = e.key.toLowerCase();
         if (key === 'v') setActiveDrawingTool('select');
+        else if (key === 'm') setActiveDrawingTool('multi-select');
         else if (key === 'b') setActiveDrawingTool('brush');
         else if (key === 'p') setActiveDrawingTool('pen');
         else if (key === 'l') setActiveDrawingTool('line');
@@ -391,6 +437,47 @@ export const Canvas2DEditor: React.FC = () => {
             background,
             isPlaying,
           });
+
+          // Skip all editor overlays, stage grids, motion trails, and selection UI handles when Preview Mode is active
+          if (!isPreviewMode) {
+            // Draw configurable Snap-to-Grid stage overlay when snapToGrid is active
+            if (snapToGrid) {
+            const safeGrid = Math.max(8, Math.round(gridSize || 40));
+            const majorEvery = safeGrid * 4;
+            ctx.save();
+
+            // Minor grid lines
+            ctx.beginPath();
+            for (let gx = safeGrid; gx < canvasWidth; gx += safeGrid) {
+              if (gx % majorEvery === 0) continue;
+              ctx.moveTo(gx, 0);
+              ctx.lineTo(gx, canvasHeight);
+            }
+            for (let gy = safeGrid; gy < canvasHeight; gy += safeGrid) {
+              if (gy % majorEvery === 0) continue;
+              ctx.moveTo(0, gy);
+              ctx.lineTo(canvasWidth, gy);
+            }
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.11)';
+            ctx.lineWidth = Math.max(1, 1 / zoom);
+            ctx.stroke();
+
+            // Major grid lines (every 4 cells)
+            ctx.beginPath();
+            for (let gx = majorEvery; gx < canvasWidth; gx += majorEvery) {
+              ctx.moveTo(gx, 0);
+              ctx.lineTo(gx, canvasHeight);
+            }
+            for (let gy = majorEvery; gy < canvasHeight; gy += majorEvery) {
+              ctx.moveTo(0, gy);
+              ctx.lineTo(canvasWidth, gy);
+            }
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.24)';
+            ctx.lineWidth = Math.max(1.2, 1.4 / zoom);
+            ctx.stroke();
+
+            ctx.restore();
+          }
 
           // Draw smart alignment guides
           if (
@@ -807,9 +894,15 @@ export const Canvas2DEditor: React.FC = () => {
             }
           }
 
-          // Draw Selection Bounding Box, 8 Resize Handles (Corners + Sides), Rotation Handle & Endpoint Handles for Selected Drawing Object
-          if (selectedDrawingId) {
-            const rawSelDr = drawings.find((d) => d.id === selectedDrawingId);
+          // Draw Selection Bounding Box for Selected Drawings (single or multi-selected via marquee)
+          const activeSelectedDrawingIds = Array.from(
+            new Set([
+              ...selectedDrawingIds,
+              ...(selectedDrawingId ? [selectedDrawingId] : []),
+            ])
+          );
+          for (const drId of activeSelectedDrawingIds) {
+            const rawSelDr = drawings.find((d) => d.id === drId);
             if (rawSelDr && rawSelDr.visible) {
               const drTrack = tracks.find((t) => t.targetId === rawSelDr.id);
               const selDr = resolveDrawingAtFrame(
@@ -923,6 +1016,199 @@ export const Canvas2DEditor: React.FC = () => {
               ctx.restore();
             }
           }
+
+          // Draw Combined Multi-Selection Group Bounding Box when 2+ elements are selected
+          const activeSelectedWebcamIds = Array.from(
+            new Set([
+              ...selectedWebcamIds,
+              ...(selectedWebcamId ? [selectedWebcamId] : []),
+            ])
+          );
+          const totalSelectedCount =
+            selectedIds.length +
+            activeSelectedDrawingIds.length +
+            activeSelectedWebcamIds.length;
+
+          if (totalSelectedCount >= 2) {
+            let gMinX = Infinity;
+            let gMaxX = -Infinity;
+            let gMinY = Infinity;
+            let gMaxY = -Infinity;
+
+            for (const devId of selectedIds) {
+              const rawDev = devices.find((d) => d.id === devId);
+              if (!rawDev || !rawDev.visible) continue;
+              const track = tracks.find((t) => t.targetId === rawDev.id);
+              const dev = resolveDeviceAtFrame(
+                rawDev,
+                track ? track.keyframes : [],
+                currentFrame,
+                durationInFrames
+              );
+              const bw = dev.width * dev.scaleX;
+              const bh = dev.height * dev.scaleY;
+              const rad = (dev.rotation * Math.PI) / 180;
+              const cos = Math.abs(Math.cos(rad));
+              const sin = Math.abs(Math.sin(rad));
+              const halfW = (bw * cos + bh * sin) / 2;
+              const halfH = (bw * sin + bh * cos) / 2;
+              gMinX = Math.min(gMinX, dev.x - halfW);
+              gMaxX = Math.max(gMaxX, dev.x + halfW);
+              gMinY = Math.min(gMinY, dev.y - halfH);
+              gMaxY = Math.max(gMaxY, dev.y + halfH);
+            }
+
+            for (const drId of activeSelectedDrawingIds) {
+              const rawDr = drawings.find((d) => d.id === drId);
+              if (!rawDr || !rawDr.visible) continue;
+              const drTrack = tracks.find((t) => t.targetId === rawDr.id);
+              const dr = resolveDrawingAtFrame(
+                rawDr,
+                drTrack ? drTrack.keyframes : [],
+                currentFrame
+              );
+              const bw = dr.width * dr.scaleX;
+              const bh = dr.height * dr.scaleY;
+              const halfW = bw / 2;
+              const halfH = bh / 2;
+              gMinX = Math.min(gMinX, dr.x - halfW);
+              gMaxX = Math.max(gMaxX, dr.x + halfW);
+              gMinY = Math.min(gMinY, dr.y - halfH);
+              gMaxY = Math.max(gMaxY, dr.y + halfH);
+            }
+
+            for (const wcId of activeSelectedWebcamIds) {
+              const rawWc = webcams.find((w) => w.id === wcId);
+              if (!rawWc || !rawWc.visible) continue;
+              const wcTrack = tracks.find((t) => t.targetId === rawWc.id);
+              const wc = resolveWebcamAtFrame(
+                rawWc,
+                wcTrack ? wcTrack.keyframes : [],
+                currentFrame
+              );
+              const bw = wc.width * wc.scaleX;
+              const bh = wc.height * wc.scaleY;
+              const halfW = bw / 2;
+              const halfH = bh / 2;
+              gMinX = Math.min(gMinX, wc.x - halfW);
+              gMaxX = Math.max(gMaxX, wc.x + halfW);
+              gMinY = Math.min(gMinY, wc.y - halfH);
+              gMaxY = Math.max(gMaxY, wc.y + halfH);
+            }
+
+            if (Number.isFinite(gMinX) && Number.isFinite(gMaxX)) {
+              const pad = 16 / zoom;
+              const boxX = gMinX - pad;
+              const boxY = gMinY - pad;
+              const boxW = gMaxX - gMinX + pad * 2;
+              const boxH = gMaxY - gMinY + pad * 2;
+
+              ctx.save();
+              ctx.strokeStyle = 'rgba(99, 102, 241, 0.9)';
+              ctx.lineWidth = Math.max(1.8, 2 / zoom);
+              ctx.setLineDash([8 / zoom, 5 / zoom]);
+              ctx.strokeRect(boxX, boxY, boxW, boxH);
+              ctx.setLineDash([]);
+
+              // Multi-Selection Group Header Pill
+              const groupLabel = `${totalSelectedCount} SELECTED · ${Math.round(
+                gMaxX - gMinX
+              )} × ${Math.round(gMaxY - gMinY)} px`;
+              const fontSize = Math.max(10, Math.round(11 / zoom));
+              ctx.font = `600 ${fontSize}px "JetBrains Mono", monospace`;
+              const textW = ctx.measureText(groupLabel).width;
+              const pillW = textW + 16 / zoom;
+              const pillH = 21 / zoom;
+              const pillX = boxX;
+              const pillY = Math.max(8 / zoom, boxY - pillH - 6 / zoom);
+
+              ctx.fillStyle = 'rgba(30, 27, 75, 0.94)';
+              ctx.strokeStyle = '#818CF8';
+              ctx.lineWidth = 1.4 / zoom;
+              ctx.beginPath();
+              ctx.roundRect(pillX, pillY, pillW, pillH, 5 / zoom);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.fillStyle = '#E0E7FF';
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(groupLabel, pillX + 8 / zoom, pillY + pillH / 2);
+              ctx.restore();
+            }
+          }
+
+          // Draw Active Marquee Selection Box when user is drag-selecting in empty space
+          if (interaction.type === 'marquee') {
+            const mMinX = Math.min(interaction.startX, interaction.currentX);
+            const mMaxX = Math.max(interaction.startX, interaction.currentX);
+            const mMinY = Math.min(interaction.startY, interaction.currentY);
+            const mMaxY = Math.max(interaction.startY, interaction.currentY);
+            const mW = mMaxX - mMinX;
+            const mH = mMaxY - mMinY;
+
+            if (mW >= 2 || mH >= 2) {
+              ctx.save();
+              ctx.fillStyle = 'rgba(37, 99, 235, 0.14)';
+              ctx.fillRect(mMinX, mMinY, mW, mH);
+
+              ctx.strokeStyle = '#38BDF8';
+              ctx.lineWidth = Math.max(1.6, 2 / zoom);
+              ctx.strokeRect(mMinX, mMinY, mW, mH);
+
+              ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+              ctx.lineWidth = Math.max(1, 1.2 / zoom);
+              ctx.setLineDash([6 / zoom, 5 / zoom]);
+              ctx.strokeRect(mMinX, mMinY, mW, mH);
+              ctx.setLineDash([]);
+
+              // Corner anchor squares on marquee box
+              const cs = 7 / zoom;
+              ctx.fillStyle = '#38BDF8';
+              for (const [cx, cy] of [
+                [mMinX, mMinY],
+                [mMaxX, mMinY],
+                [mMaxX, mMaxY],
+                [mMinX, mMaxY],
+              ]) {
+                ctx.fillRect(cx - cs / 2, cy - cs / 2, cs, cs);
+              }
+
+              // Live Marquee Dimension & Hit Readout Pill
+              const marqueeLabel = `MARQUEE · ${totalSelectedCount} HIT · ${Math.round(
+                mW
+              )} × ${Math.round(mH)} px`;
+              const fontSize = Math.max(10, Math.round(11 / zoom));
+              ctx.font = `600 ${fontSize}px "JetBrains Mono", monospace`;
+              const textW = ctx.measureText(marqueeLabel).width;
+              const pillW = textW + 14 / zoom;
+              const pillH = 20 / zoom;
+              const pillX = Math.min(
+                canvasWidth - pillW - 6 / zoom,
+                Math.max(6 / zoom, mMaxX - pillW)
+              );
+              const pillY = Math.min(
+                canvasHeight - pillH - 6 / zoom,
+                mMaxY + 8 / zoom
+              );
+
+              ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+              ctx.strokeStyle = '#38BDF8';
+              ctx.lineWidth = 1.2 / zoom;
+              ctx.beginPath();
+              ctx.roundRect(pillX, pillY, pillW, pillH, 5 / zoom);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.fillStyle = '#F8FAFC';
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(marqueeLabel, pillX + 7 / zoom, pillY + pillH / 2);
+
+              ctx.restore();
+            }
+          }
+          }
         }
       }
 
@@ -943,7 +1229,9 @@ export const Canvas2DEditor: React.FC = () => {
     background,
     selectedIds,
     selectedDrawingId,
+    selectedDrawingIds,
     selectedWebcamId,
+    selectedWebcamIds,
     drawingDefaults,
     interaction,
     currentFrame,
@@ -951,7 +1239,10 @@ export const Canvas2DEditor: React.FC = () => {
     durationInFrames,
     isPlaying,
     zoom,
+    snapToGrid,
+    gridSize,
     showGuides,
+    isPreviewMode,
     showMotionTrail,
     activeGuides,
   ]);
@@ -969,10 +1260,127 @@ export const Canvas2DEditor: React.FC = () => {
     };
   };
 
+  // Compute all unlocked visible scene elements intersecting a canvas-space marquee box
+  const computeMarqueeSelectionAtRect = (
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    additive: boolean,
+    initialDeviceIds: string[],
+    initialDrawingIds: string[],
+    initialWebcamIds: string[]
+  ) => {
+    const minX = Math.min(x1, x2);
+    const maxX = Math.max(x1, x2);
+    const minY = Math.min(y1, y2);
+    const maxY = Math.max(y1, y2);
+
+    const hitDeviceIds: string[] = [];
+    for (const rawDev of devices) {
+      if (!rawDev.visible || rawDev.locked) continue;
+      const track = tracks.find((t) => t.targetId === rawDev.id);
+      const dev = resolveDeviceAtFrame(
+        rawDev,
+        track ? track.keyframes : [],
+        currentFrame,
+        durationInFrames
+      );
+      const bw = dev.width * dev.scaleX;
+      const bh = dev.height * dev.scaleY;
+      const rad = (dev.rotation * Math.PI) / 180;
+      const cos = Math.abs(Math.cos(rad));
+      const sin = Math.abs(Math.sin(rad));
+      const halfW = (bw * cos + bh * sin) / 2;
+      const halfH = (bw * sin + bh * cos) / 2;
+      if (
+        dev.x + halfW >= minX &&
+        dev.x - halfW <= maxX &&
+        dev.y + halfH >= minY &&
+        dev.y - halfH <= maxY
+      ) {
+        hitDeviceIds.push(rawDev.id);
+      }
+    }
+
+    const hitDrawingIds: string[] = [];
+    for (const rawDr of drawings) {
+      if (!rawDr.visible || rawDr.locked) continue;
+      const drTrack = tracks.find((t) => t.targetId === rawDr.id);
+      const dr = resolveDrawingAtFrame(
+        rawDr,
+        drTrack ? drTrack.keyframes : [],
+        currentFrame
+      );
+      const bw = dr.width * dr.scaleX;
+      const bh = dr.height * dr.scaleY;
+      const rad = (dr.rotation * Math.PI) / 180;
+      const cos = Math.abs(Math.cos(rad));
+      const sin = Math.abs(Math.sin(rad));
+      const halfW = (bw * cos + bh * sin) / 2;
+      const halfH = (bw * sin + bh * cos) / 2;
+      if (
+        dr.x + halfW >= minX &&
+        dr.x - halfW <= maxX &&
+        dr.y + halfH >= minY &&
+        dr.y - halfH <= maxY
+      ) {
+        hitDrawingIds.push(rawDr.id);
+      }
+    }
+
+    const hitWebcamIds: string[] = [];
+    for (const rawWc of webcams) {
+      if (!rawWc.visible || rawWc.locked) continue;
+      const wcTrack = tracks.find((t) => t.targetId === rawWc.id);
+      const wc = resolveWebcamAtFrame(
+        rawWc,
+        wcTrack ? wcTrack.keyframes : [],
+        currentFrame
+      );
+      const bw = wc.width * wc.scaleX;
+      const bh = wc.height * wc.scaleY;
+      const rad = (wc.rotation * Math.PI) / 180;
+      const cos = Math.abs(Math.cos(rad));
+      const sin = Math.abs(Math.sin(rad));
+      const halfW = (bw * cos + bh * sin) / 2;
+      const halfH = (bw * sin + bh * cos) / 2;
+      if (
+        wc.x + halfW >= minX &&
+        wc.x - halfW <= maxX &&
+        wc.y + halfH >= minY &&
+        wc.y - halfH <= maxY
+      ) {
+        hitWebcamIds.push(rawWc.id);
+      }
+    }
+
+    return {
+      deviceIds: additive
+        ? Array.from(new Set([...initialDeviceIds, ...hitDeviceIds]))
+        : hitDeviceIds,
+      drawingIds: additive
+        ? Array.from(new Set([...initialDrawingIds, ...hitDrawingIds]))
+        : hitDrawingIds,
+      webcamIds: additive
+        ? Array.from(new Set([...initialWebcamIds, ...hitWebcamIds]))
+        : hitWebcamIds,
+    };
+  };
+
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     // Ignore clicks on floating HUD buttons
     if ((e.target as HTMLElement).closest('[data-hud-overlay="true"]')) {
       return;
+    }
+
+    // Ignore right-clicks here so handleContextMenu manages selection & context menu
+    if (e.button === 2) {
+      return;
+    }
+
+    if (contextMenu) {
+      setContextMenu(null);
     }
 
     try {
@@ -981,7 +1389,12 @@ export const Canvas2DEditor: React.FC = () => {
       // Ignore if synthetic event lacks pointerId registration
     }
 
-    if (e.button === 1 || e.altKey || activeDrawingTool === 'pan') {
+    if (
+      isPreviewMode ||
+      e.button === 1 ||
+      e.altKey ||
+      activeDrawingTool === 'pan'
+    ) {
       setInteraction({
         type: 'pan',
         startMouseX: e.clientX,
@@ -1030,6 +1443,24 @@ export const Canvas2DEditor: React.FC = () => {
       });
       return;
     }
+
+    // 2.2. When Marquee Selection tool ('multi-select') is explicitly active, starting a drag anywhere begins a marquee selection unless clicking an already-selected item in a multi-selection
+    const currentSelectedDrawingIds = Array.from(
+      new Set([
+        ...selectedDrawingIds,
+        ...(selectedDrawingId ? [selectedDrawingId] : []),
+      ])
+    );
+    const currentSelectedWebcamIds = Array.from(
+      new Set([
+        ...selectedWebcamIds,
+        ...(selectedWebcamId ? [selectedWebcamId] : []),
+      ])
+    );
+    const currentTotalSelectedCount =
+      selectedIds.length +
+      currentSelectedDrawingIds.length +
+      currentSelectedWebcamIds.length;
 
     // 2.5. If Onion Skin / Motion Trail is active, clicking a keyframe waypoint diamond on the canvas jumps the playhead to that frame
     if (showMotionTrail && activeDrawingTool === 'select') {
@@ -1294,6 +1725,37 @@ export const Canvas2DEditor: React.FC = () => {
       }
     }
 
+    // Helper to build multi-selection drag state when dragging a group of marquee-selected elements
+    const startMultiElementDrag = (primaryAnchorId: string) => {
+      const initialPositions: Record<string, { x: number; y: number }> = {};
+      for (const id of selectedIds) {
+        const item = devices.find((d) => d.id === id);
+        if (item) initialPositions[id] = { x: item.x, y: item.y };
+      }
+      const initialDrawingPositions: Record<string, { x: number; y: number }> =
+        {};
+      for (const id of currentSelectedDrawingIds) {
+        const item = drawings.find((d) => d.id === id);
+        if (item) initialDrawingPositions[id] = { x: item.x, y: item.y };
+      }
+      const initialWebcamPositions: Record<string, { x: number; y: number }> =
+        {};
+      for (const id of currentSelectedWebcamIds) {
+        const item = webcams.find((w) => w.id === id);
+        if (item) initialWebcamPositions[id] = { x: item.x, y: item.y };
+      }
+
+      setInteraction({
+        type: 'drag',
+        deviceId: primaryAnchorId,
+        startMouseX: pt.x,
+        startMouseY: pt.y,
+        initialPositions,
+        initialDrawingPositions,
+        initialWebcamPositions,
+      });
+    };
+
     // 4. Hit-test Drawings first (since drawings render on top of devices)
     const sortedDrawings = [...drawings]
       .filter((d) => d.visible && !d.locked)
@@ -1314,6 +1776,22 @@ export const Canvas2DEditor: React.FC = () => {
       const halfW = (dr.width * dr.scaleX) / 2 + 14;
       const halfH = (dr.height * dr.scaleY) / 2 + 14;
       if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        if (
+          activeDrawingTool === 'multi-select' &&
+          !currentSelectedDrawingIds.includes(dr.id)
+        ) {
+          break;
+        }
+        if (
+          currentTotalSelectedCount > 1 &&
+          currentSelectedDrawingIds.includes(dr.id) &&
+          !e.shiftKey &&
+          !e.metaKey &&
+          !e.ctrlKey
+        ) {
+          startMultiElementDrag(dr.id);
+          return;
+        }
         selectDrawing(dr.id);
         setInteraction({
           type: 'drag-drawing',
@@ -1348,6 +1826,22 @@ export const Canvas2DEditor: React.FC = () => {
       const halfW = (wc.width * wc.scaleX) / 2;
       const halfH = (wc.height * wc.scaleY) / 2;
       if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        if (
+          activeDrawingTool === 'multi-select' &&
+          !currentSelectedWebcamIds.includes(wc.id)
+        ) {
+          break;
+        }
+        if (
+          currentTotalSelectedCount > 1 &&
+          currentSelectedWebcamIds.includes(wc.id) &&
+          !e.shiftKey &&
+          !e.metaKey &&
+          !e.ctrlKey
+        ) {
+          startMultiElementDrag(wc.id);
+          return;
+        }
         selectWebcam(wc.id);
         setInteraction({
           type: 'drag-webcam',
@@ -1384,6 +1878,20 @@ export const Canvas2DEditor: React.FC = () => {
 
       if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
         const isMulti = e.shiftKey || e.metaKey || e.ctrlKey;
+        if (
+          activeDrawingTool === 'multi-select' &&
+          !selectedIds.includes(dev.id) &&
+          !isMulti
+        ) {
+          break;
+        }
+
+        // Preserve existing multi-selection when clicking inside an already-selected device to drag the group
+        if (!isMulti && selectedIds.includes(dev.id) && currentTotalSelectedCount > 1) {
+          startMultiElementDrag(dev.id);
+          return;
+        }
+
         selectDevice(dev.id, isMulti);
 
         const activeIds = isMulti
@@ -1426,6 +1934,12 @@ export const Canvas2DEditor: React.FC = () => {
       const halfW = (wc.width * wc.scaleX) / 2;
       const halfH = (wc.height * wc.scaleY) / 2;
       if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        if (
+          activeDrawingTool === 'multi-select' &&
+          !currentSelectedWebcamIds.includes(wc.id)
+        ) {
+          break;
+        }
         selectWebcam(wc.id);
         setInteraction({
           type: 'drag-webcam',
@@ -1439,19 +1953,79 @@ export const Canvas2DEditor: React.FC = () => {
       }
     }
 
-    // Clicked empty canvas space
-    selectDevice(null);
-    selectDrawing(null);
-    selectWebcam(null);
+    // 6. Clicked empty canvas space (or started Marquee Box Select) -> initiate Marquee Selection
+    const isAdditive = e.shiftKey || e.metaKey || e.ctrlKey;
+    const initDeviceIds = isAdditive ? [...selectedIds] : [];
+    const initDrawingIds = isAdditive ? [...currentSelectedDrawingIds] : [];
+    const initWebcamIds = isAdditive ? [...currentSelectedWebcamIds] : [];
+
+    if (!isAdditive) {
+      setMarqueeSelection({
+        deviceIds: [],
+        drawingIds: [],
+        webcamIds: [],
+      });
+    }
+
+    setInteraction({
+      type: 'marquee',
+      startX: pt.x,
+      startY: pt.y,
+      currentX: pt.x,
+      currentY: pt.y,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      currentClientX: e.clientX,
+      currentClientY: e.clientY,
+      additive: isAdditive,
+      initialDeviceIds: initDeviceIds,
+      initialDrawingIds: initDrawingIds,
+      initialWebcamIds: initWebcamIds,
+    });
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const pt = clientToCanvasCoords(e.clientX, e.clientY);
     setCursorCoords({ x: Math.round(pt.x), y: Math.round(pt.y) });
 
-    if (interaction.type === 'none') return;
+    const activeInteraction = interactionRef.current;
+    if (activeInteraction.type === 'none') return;
 
-    if (interaction.type === 'erasing') {
+    if (activeInteraction.type === 'marquee') {
+      const nextMarquee: InteractionMode = {
+        ...activeInteraction,
+        currentX: pt.x,
+        currentY: pt.y,
+        currentClientX: e.clientX,
+        currentClientY: e.clientY,
+      };
+      setInteraction(nextMarquee);
+
+      const canvasDist = Math.hypot(
+        pt.x - activeInteraction.startX,
+        pt.y - activeInteraction.startY
+      );
+      const clientDist = Math.hypot(
+        e.clientX - activeInteraction.startClientX,
+        e.clientY - activeInteraction.startClientY
+      );
+      if (canvasDist >= 3 || clientDist >= 2) {
+        const hits = computeMarqueeSelectionAtRect(
+          activeInteraction.startX,
+          activeInteraction.startY,
+          pt.x,
+          pt.y,
+          activeInteraction.additive,
+          activeInteraction.initialDeviceIds,
+          activeInteraction.initialDrawingIds,
+          activeInteraction.initialWebcamIds
+        );
+        setMarqueeSelection(hits);
+      }
+      return;
+    }
+
+    if (activeInteraction.type === 'erasing') {
       const hitDrawing = [...drawings]
         .filter((d) => d.visible && !d.locked)
         .reverse()
@@ -1468,51 +2042,52 @@ export const Canvas2DEditor: React.FC = () => {
       return;
     }
 
-    if (interaction.type === 'creating-drawing') {
-      const lastPt = interaction.points[interaction.points.length - 1];
+    if (activeInteraction.type === 'creating-drawing') {
+      const lastPt =
+        activeInteraction.points[activeInteraction.points.length - 1];
       const shouldAppendPoint =
         !lastPt || Math.hypot(pt.x - lastPt.x, pt.y - lastPt.y) >= 4;
       setInteraction({
-        ...interaction,
+        ...activeInteraction,
         currentX: pt.x,
         currentY: pt.y,
         points: shouldAppendPoint
-          ? [...interaction.points, { x: pt.x, y: pt.y }]
-          : interaction.points,
+          ? [...activeInteraction.points, { x: pt.x, y: pt.y }]
+          : activeInteraction.points,
       });
       return;
     }
 
-    if (interaction.type === 'pan') {
-      const dx = e.clientX - interaction.startMouseX;
-      const dy = e.clientY - interaction.startMouseY;
+    if (activeInteraction.type === 'pan') {
+      const dx = e.clientX - activeInteraction.startMouseX;
+      const dy = e.clientY - activeInteraction.startMouseY;
       setZoomAndPan(
         zoom,
-        interaction.startPanX + dx,
-        interaction.startPanY + dy
+        activeInteraction.startPanX + dx,
+        activeInteraction.startPanY + dy
       );
       return;
     }
 
-    if (interaction.type === 'drag-webcam') {
-      const dx = pt.x - interaction.startMouseX;
-      const dy = pt.y - interaction.startMouseY;
+    if (activeInteraction.type === 'drag-webcam') {
+      const dx = pt.x - activeInteraction.startMouseX;
+      const dy = pt.y - activeInteraction.startMouseY;
       const otherCenters = devices
         .filter((d) => d.visible)
         .map((d) => ({ x: d.x, y: d.y }));
       const snapped = computeSnapPosition(
-        interaction.startX + dx,
-        interaction.startY + dy,
+        activeInteraction.startX + dx,
+        activeInteraction.startY + dy,
         canvasWidth,
         canvasHeight,
         otherCenters,
         snapToGrid,
-        20,
+        gridSize,
         10
       );
       setActiveGuides({ x: snapped.guidesX, y: snapped.guidesY });
       updateWebcam(
-        interaction.webcamId,
+        activeInteraction.webcamId,
         {
           x: Math.round(snapped.x),
           y: Math.round(snapped.y),
@@ -1522,14 +2097,14 @@ export const Canvas2DEditor: React.FC = () => {
       return;
     }
 
-    if (interaction.type === 'resize-webcam') {
-      const orig = interaction.origWebcam;
+    if (activeInteraction.type === 'resize-webcam') {
+      const orig = activeInteraction.origWebcam;
       const rad = (-orig.rotation * Math.PI) / 180;
-      const rawDx = pt.x - interaction.startMouseX;
-      const rawDy = pt.y - interaction.startMouseY;
+      const rawDx = pt.x - activeInteraction.startMouseX;
+      const rawDy = pt.y - activeInteraction.startMouseY;
       const localDx = rawDx * Math.cos(rad) - rawDy * Math.sin(rad);
       const localDy = rawDx * Math.sin(rad) + rawDy * Math.cos(rad);
-      const h = interaction.handle;
+      const h = activeInteraction.handle;
 
       let nextW = orig.width;
       let nextH = orig.height;
@@ -1544,6 +2119,12 @@ export const Canvas2DEditor: React.FC = () => {
         nextH = Math.max(80, Math.round(orig.height + localDy * 2));
       } else if (h === 'n' || h === 'ne' || h === 'nw') {
         nextH = Math.max(80, Math.round(orig.height - localDy * 2));
+      }
+
+      if (snapToGrid) {
+        const step = Math.max(8, gridSize || 40);
+        nextW = Math.max(80, Math.round(nextW / step) * step);
+        nextH = Math.max(80, Math.round(nextH / step) * step);
       }
 
       const lockAspect =
@@ -1562,7 +2143,7 @@ export const Canvas2DEditor: React.FC = () => {
       }
 
       updateWebcam(
-        interaction.webcamId,
+        activeInteraction.webcamId,
         {
           width: nextW,
           height: nextH,
@@ -1572,22 +2153,22 @@ export const Canvas2DEditor: React.FC = () => {
       return;
     }
 
-    if (interaction.type === 'rotate-webcam') {
+    if (activeInteraction.type === 'rotate-webcam') {
       const angle = Math.atan2(
-        pt.y - interaction.centerY,
-        pt.x - interaction.centerX
+        pt.y - activeInteraction.centerY,
+        pt.x - activeInteraction.centerX
       );
-      const degDelta = ((angle - interaction.startAngle) * 180) / Math.PI;
-      let nextRot = Math.round(interaction.initialRotation + degDelta);
+      const degDelta = ((angle - activeInteraction.startAngle) * 180) / Math.PI;
+      let nextRot = Math.round(activeInteraction.initialRotation + degDelta);
       if ((snapToGrid || e.shiftKey) && Math.abs(nextRot % 15) <= 4) {
         nextRot = Math.round(nextRot / 15) * 15;
       }
-      updateWebcam(interaction.webcamId, { rotation: nextRot }, false);
+      updateWebcam(activeInteraction.webcamId, { rotation: nextRot }, false);
       return;
     }
 
-    if (interaction.type === 'drag-webcam-bezier-point') {
-      const rawWc = webcams.find((w) => w.id === interaction.webcamId);
+    if (activeInteraction.type === 'drag-webcam-bezier-point') {
+      const rawWc = webcams.find((w) => w.id === activeInteraction.webcamId);
       if (!rawWc || !rawWc.bezierPoints) return;
       const dx = pt.x - rawWc.x;
       const dy = pt.y - rawWc.y;
@@ -1596,37 +2177,61 @@ export const Canvas2DEditor: React.FC = () => {
       const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
       const halfW = Math.max(20, (rawWc.width * rawWc.scaleX) / 2);
       const halfH = Math.max(20, (rawWc.height * rawWc.scaleY) / 2);
-      const normX = Math.max(-1.4, Math.min(1.4, Number((localX / halfW).toFixed(3))));
-      const normY = Math.max(-1.4, Math.min(1.4, Number((localY / halfH).toFixed(3))));
-      const nextPoints = rawWc.bezierPoints.map((bp, idx) =>
-        idx === interaction.pointIndex ? { x: normX, y: normY } : bp
+      const normX = Math.max(
+        -1.4,
+        Math.min(1.4, Number((localX / halfW).toFixed(3)))
       );
-      updateWebcam(interaction.webcamId, { bezierPoints: nextPoints }, false);
+      const normY = Math.max(
+        -1.4,
+        Math.min(1.4, Number((localY / halfH).toFixed(3)))
+      );
+      const nextPoints = rawWc.bezierPoints.map((bp, idx) =>
+        idx === activeInteraction.pointIndex ? { x: normX, y: normY } : bp
+      );
+      updateWebcam(
+        activeInteraction.webcamId,
+        { bezierPoints: nextPoints },
+        false
+      );
       return;
     }
 
-    if (interaction.type === 'drag-drawing') {
-      const dx = pt.x - interaction.startMouseX;
-      const dy = pt.y - interaction.startMouseY;
+    if (activeInteraction.type === 'drag-drawing') {
+      const dx = pt.x - activeInteraction.startMouseX;
+      const dy = pt.y - activeInteraction.startMouseY;
+      const otherCenters = devices
+        .filter((d) => d.visible)
+        .map((d) => ({ x: d.x, y: d.y }));
+      const snapped = computeSnapPosition(
+        activeInteraction.startX + dx,
+        activeInteraction.startY + dy,
+        canvasWidth,
+        canvasHeight,
+        otherCenters,
+        snapToGrid,
+        gridSize,
+        10
+      );
+      setActiveGuides({ x: snapped.guidesX, y: snapped.guidesY });
       updateDrawing(
-        interaction.drawingId,
+        activeInteraction.drawingId,
         {
-          x: Math.round(interaction.startX + dx),
-          y: Math.round(interaction.startY + dy),
+          x: Math.round(snapped.x),
+          y: Math.round(snapped.y),
         },
         false
       );
       return;
     }
 
-    if (interaction.type === 'resize-drawing') {
-      const orig = interaction.origDrawing;
+    if (activeInteraction.type === 'resize-drawing') {
+      const orig = activeInteraction.origDrawing;
       const rad = (-orig.rotation * Math.PI) / 180;
-      const rawDx = pt.x - interaction.startMouseX;
-      const rawDy = pt.y - interaction.startMouseY;
+      const rawDx = pt.x - activeInteraction.startMouseX;
+      const rawDy = pt.y - activeInteraction.startMouseY;
       const localDx = rawDx * Math.cos(rad) - rawDy * Math.sin(rad);
       const localDy = rawDx * Math.sin(rad) + rawDy * Math.cos(rad);
-      const h = interaction.handle;
+      const h = activeInteraction.handle;
 
       let reqW: number | undefined;
       let reqH: number | undefined;
@@ -1643,6 +2248,14 @@ export const Canvas2DEditor: React.FC = () => {
         reqH = Math.max(16, orig.height - localDy * 2);
       }
 
+      if (snapToGrid) {
+        const step = Math.max(8, gridSize || 40);
+        if (reqW !== undefined)
+          reqW = Math.max(16, Math.round(reqW / step) * step);
+        if (reqH !== undefined)
+          reqH = Math.max(16, Math.round(reqH / step) * step);
+      }
+
       const lockAspect =
         Boolean(orig.lockAspectRatio) ||
         orig.tool === 'circle' ||
@@ -1650,7 +2263,7 @@ export const Canvas2DEditor: React.FC = () => {
 
       const resized = resizeDrawingGeometry(orig, reqW, reqH, lockAspect);
       updateDrawing(
-        interaction.drawingId,
+        activeInteraction.drawingId,
         {
           width: resized.width,
           height: resized.height,
@@ -1661,27 +2274,42 @@ export const Canvas2DEditor: React.FC = () => {
       return;
     }
 
-    if (interaction.type === 'rotate-drawing') {
+    if (activeInteraction.type === 'rotate-drawing') {
       const angle = Math.atan2(
-        pt.y - interaction.centerY,
-        pt.x - interaction.centerX
+        pt.y - activeInteraction.centerY,
+        pt.x - activeInteraction.centerX
       );
-      const degDelta = ((angle - interaction.startAngle) * 180) / Math.PI;
-      let nextRot = Math.round(interaction.initialRotation + degDelta);
+      const degDelta = ((angle - activeInteraction.startAngle) * 180) / Math.PI;
+      let nextRot = Math.round(activeInteraction.initialRotation + degDelta);
       if ((snapToGrid || e.shiftKey) && Math.abs(nextRot % 15) <= 4) {
         nextRot = Math.round(nextRot / 15) * 15;
       }
-      updateDrawing(interaction.drawingId, { rotation: nextRot }, false);
+      updateDrawing(activeInteraction.drawingId, { rotation: nextRot }, false);
       return;
     }
 
-    if (interaction.type === 'drag-drawing-endpoint') {
-      const rawDr = drawings.find((d) => d.id === interaction.drawingId);
+    if (activeInteraction.type === 'drag-drawing-endpoint') {
+      const rawDr = drawings.find((d) => d.id === activeInteraction.drawingId);
       if (!rawDr) return;
-      const startX = interaction.endpointIndex === 0 ? pt.x : interaction.otherX;
-      const startY = interaction.endpointIndex === 0 ? pt.y : interaction.otherY;
-      const endX = interaction.endpointIndex === 1 ? pt.x : interaction.otherX;
-      const endY = interaction.endpointIndex === 1 ? pt.y : interaction.otherY;
+      const step = Math.max(8, gridSize || 40);
+      const targetPtX = snapToGrid ? Math.round(pt.x / step) * step : pt.x;
+      const targetPtY = snapToGrid ? Math.round(pt.y / step) * step : pt.y;
+      const startX =
+        activeInteraction.endpointIndex === 0
+          ? targetPtX
+          : activeInteraction.otherX;
+      const startY =
+        activeInteraction.endpointIndex === 0
+          ? targetPtY
+          : activeInteraction.otherY;
+      const endX =
+        activeInteraction.endpointIndex === 1
+          ? targetPtX
+          : activeInteraction.otherX;
+      const endY =
+        activeInteraction.endpointIndex === 1
+          ? targetPtY
+          : activeInteraction.otherY;
       const updated = updateDrawingLineEndpoints(
         rawDr,
         startX,
@@ -1689,18 +2317,23 @@ export const Canvas2DEditor: React.FC = () => {
         endX,
         endY
       );
-      updateDrawing(interaction.drawingId, updated, false);
+      updateDrawing(activeInteraction.drawingId, updated, false);
       return;
     }
 
-    if (interaction.type === 'drag') {
-      const dx = pt.x - interaction.startMouseX;
-      const dy = pt.y - interaction.startMouseY;
-      const primaryStart = interaction.initialPositions[interaction.deviceId];
+    if (activeInteraction.type === 'drag') {
+      const dx = pt.x - activeInteraction.startMouseX;
+      const dy = pt.y - activeInteraction.startMouseY;
+      const primaryStart =
+        activeInteraction.initialPositions[activeInteraction.deviceId] ||
+        activeInteraction.initialDrawingPositions?.[
+          activeInteraction.deviceId
+        ] ||
+        activeInteraction.initialWebcamPositions?.[activeInteraction.deviceId];
       if (!primaryStart) return;
 
       const otherCenters = devices
-        .filter((d) => !interaction.initialPositions[d.id] && d.visible)
+        .filter((d) => !activeInteraction.initialPositions[d.id] && d.visible)
         .map((d) => ({ x: d.x, y: d.y }));
 
       const snapped = computeSnapPosition(
@@ -1710,7 +2343,7 @@ export const Canvas2DEditor: React.FC = () => {
         canvasHeight,
         otherCenters,
         snapToGrid,
-        20,
+        gridSize,
         10
       );
 
@@ -1719,46 +2352,83 @@ export const Canvas2DEditor: React.FC = () => {
 
       setActiveGuides({ x: snapped.guidesX, y: snapped.guidesY });
 
-      Object.entries(interaction.initialPositions).forEach(([id, startPos]) => {
-        updateDevice(
-          id,
-          {
-            x: Math.round(startPos.x + appliedDx),
-            y: Math.round(startPos.y + appliedDy),
-          },
-          false
+      Object.entries(activeInteraction.initialPositions).forEach(
+        ([id, startPos]) => {
+          updateDevice(
+            id,
+            {
+              x: Math.round(startPos.x + appliedDx),
+              y: Math.round(startPos.y + appliedDy),
+            },
+            false
+          );
+        }
+      );
+
+      if (activeInteraction.initialDrawingPositions) {
+        Object.entries(activeInteraction.initialDrawingPositions).forEach(
+          ([id, startPos]) => {
+            updateDrawing(
+              id,
+              {
+                x: Math.round(startPos.x + appliedDx),
+                y: Math.round(startPos.y + appliedDy),
+              },
+              false
+            );
+          }
         );
-      });
+      }
+
+      if (activeInteraction.initialWebcamPositions) {
+        Object.entries(activeInteraction.initialWebcamPositions).forEach(
+          ([id, startPos]) => {
+            updateWebcam(
+              id,
+              {
+                x: Math.round(startPos.x + appliedDx),
+                y: Math.round(startPos.y + appliedDy),
+              },
+              false
+            );
+          }
+        );
+      }
       return;
     }
 
-    if (interaction.type === 'scale') {
+    if (activeInteraction.type === 'scale') {
       const distDelta =
-        (pt.x - interaction.startMouseX + (pt.y - interaction.startMouseY)) /
+        (pt.x -
+          activeInteraction.startMouseX +
+          (pt.y - activeInteraction.startMouseY)) /
         320;
       const nextScale = Math.max(
         0.2,
-        Math.min(3.0, Number((interaction.startScaleX + distDelta).toFixed(2)))
+        Math.min(
+          3.0,
+          Number((activeInteraction.startScaleX + distDelta).toFixed(2))
+        )
       );
       updateDevice(
-        interaction.deviceId,
+        activeInteraction.deviceId,
         { scaleX: nextScale, scaleY: nextScale },
         false
       );
       return;
     }
 
-    if (interaction.type === 'rotate') {
+    if (activeInteraction.type === 'rotate') {
       const angle = Math.atan2(
-        pt.y - interaction.centerY,
-        pt.x - interaction.centerX
+        pt.y - activeInteraction.centerY,
+        pt.x - activeInteraction.centerX
       );
-      const degDelta = ((angle - interaction.startAngle) * 180) / Math.PI;
-      let nextRot = Math.round(interaction.initialRotation + degDelta);
+      const degDelta = ((angle - activeInteraction.startAngle) * 180) / Math.PI;
+      let nextRot = Math.round(activeInteraction.initialRotation + degDelta);
       if (snapToGrid && Math.abs(nextRot % 15) <= 3) {
         nextRot = Math.round(nextRot / 15) * 15;
       }
-      updateDevice(interaction.deviceId, { rotation: nextRot }, false);
+      updateDevice(activeInteraction.deviceId, { rotation: nextRot }, false);
     }
   };
 
@@ -1771,22 +2441,60 @@ export const Canvas2DEditor: React.FC = () => {
       // Ignore
     }
 
-    if (interaction.type === 'creating-drawing') {
+    const activeInteraction = interactionRef.current;
+
+    if (activeInteraction.type === 'marquee') {
+      const pt = clientToCanvasCoords(e.clientX, e.clientY);
+      const hasValidPt =
+        Number.isFinite(pt.x) && (e.clientX !== 0 || e.clientY !== 0);
+      const endX = hasValidPt ? pt.x : activeInteraction.currentX;
+      const endY = hasValidPt ? pt.y : activeInteraction.currentY;
+      const canvasDist = Math.hypot(
+        endX - activeInteraction.startX,
+        endY - activeInteraction.startY
+      );
+      const prevDist = Math.hypot(
+        activeInteraction.currentX - activeInteraction.startX,
+        activeInteraction.currentY - activeInteraction.startY
+      );
+
+      if (canvasDist >= 3 || prevDist >= 3) {
+        const finalX =
+          canvasDist >= prevDist ? endX : activeInteraction.currentX;
+        const finalY =
+          canvasDist >= prevDist ? endY : activeInteraction.currentY;
+        const hits = computeMarqueeSelectionAtRect(
+          activeInteraction.startX,
+          activeInteraction.startY,
+          finalX,
+          finalY,
+          activeInteraction.additive,
+          activeInteraction.initialDeviceIds,
+          activeInteraction.initialDrawingIds,
+          activeInteraction.initialWebcamIds
+        );
+        setMarqueeSelection(hits);
+      }
+      setInteraction({ type: 'none' });
+      return;
+    }
+
+    if (activeInteraction.type === 'creating-drawing') {
       const isFreehandTool =
-        interaction.tool === 'brush' ||
-        interaction.tool === 'pen' ||
-        interaction.tool === 'bezier' ||
-        interaction.tool === 'freehand' ||
-        interaction.tool === 'highlight-stroke' ||
-        interaction.tool === 'neon-path' ||
-        interaction.tool === 'animated-stroke';
+        activeInteraction.tool === 'brush' ||
+        activeInteraction.tool === 'pen' ||
+        activeInteraction.tool === 'bezier' ||
+        activeInteraction.tool === 'freehand' ||
+        activeInteraction.tool === 'highlight-stroke' ||
+        activeInteraction.tool === 'neon-path' ||
+        activeInteraction.tool === 'animated-stroke';
 
       const xs = isFreehandTool
-        ? interaction.points.map((p) => p.x)
-        : [interaction.startX, interaction.currentX];
+        ? activeInteraction.points.map((p) => p.x)
+        : [activeInteraction.startX, activeInteraction.currentX];
       const ys = isFreehandTool
-        ? interaction.points.map((p) => p.y)
-        : [interaction.startY, interaction.currentY];
+        ? activeInteraction.points.map((p) => p.y)
+        : [activeInteraction.startY, activeInteraction.currentY];
 
       const minX = Math.min(...xs);
       const maxX = Math.max(...xs);
@@ -1796,30 +2504,33 @@ export const Canvas2DEditor: React.FC = () => {
       const rawW = maxX - minX;
       const rawH = maxY - minY;
       const isCircle =
-        interaction.tool === 'circle' || interaction.tool === 'pulse-ring';
+        activeInteraction.tool === 'circle' ||
+        activeInteraction.tool === 'pulse-ring';
       const baseW = Math.max(120, rawW);
       const baseH = Math.max(120, rawH);
       const w = isCircle ? Math.max(baseW, baseH) : baseW;
       const h = isCircle ? Math.max(baseW, baseH) : baseH;
-      const cx = rawW < 15 ? interaction.startX : (minX + maxX) / 2;
-      const cy = rawH < 15 ? interaction.startY : (minY + maxY) / 2;
+      const cx = rawW < 15 ? activeInteraction.startX : (minX + maxX) / 2;
+      const cy = rawH < 15 ? activeInteraction.startY : (minY + maxY) / 2;
 
       const id = `draw-${Date.now().toString(36).slice(-4)}`;
       const toolLabel =
-        interaction.tool.charAt(0).toUpperCase() + interaction.tool.slice(1);
+        activeInteraction.tool.charAt(0).toUpperCase() +
+        activeInteraction.tool.slice(1);
 
       const newDrawing: SceneDrawingObject = {
         id,
         name: `${toolLabel} #${drawings.length + 1}`,
-        tool: interaction.tool,
+        tool: activeInteraction.tool,
         text:
-          interaction.tool === 'text' || interaction.tool === 'callout-box'
+          activeInteraction.tool === 'text' ||
+          activeInteraction.tool === 'callout-box'
             ? 'Feature Callout'
             : undefined,
         fontSize: 28,
         points: isFreehandTool
-          ? interaction.points.length >= 2 && (rawW >= 15 || rawH >= 15)
-            ? interaction.points.map((p) => ({
+          ? activeInteraction.points.length >= 2 && (rawW >= 15 || rawH >= 15)
+            ? activeInteraction.points.map((p) => ({
                 x: Math.round(p.x - cx),
                 y: Math.round(p.y - cy),
               }))
@@ -1830,12 +2541,24 @@ export const Canvas2DEditor: React.FC = () => {
               ]
           : [
               {
-                x: rawW < 15 ? -80 : Math.round(interaction.startX - cx),
-                y: rawH < 15 ? 50 : Math.round(interaction.startY - cy),
+                x:
+                  rawW < 15
+                    ? -80
+                    : Math.round(activeInteraction.startX - cx),
+                y:
+                  rawH < 15
+                    ? 50
+                    : Math.round(activeInteraction.startY - cy),
               },
               {
-                x: rawW < 15 ? 80 : Math.round(interaction.currentX - cx),
-                y: rawH < 15 ? -50 : Math.round(interaction.currentY - cy),
+                x:
+                  rawW < 15
+                    ? 80
+                    : Math.round(activeInteraction.currentX - cx),
+                y:
+                  rawH < 15
+                    ? -50
+                    : Math.round(activeInteraction.currentY - cy),
               },
             ],
         x: Math.round(cx),
@@ -1853,22 +2576,23 @@ export const Canvas2DEditor: React.FC = () => {
         strokeColorEnd: drawingDefaults.strokeColorEnd,
         useGradientStroke: drawingDefaults.useGradientStroke,
         strokeWidth:
-          interaction.tool === 'highlight-stroke'
+          activeInteraction.tool === 'highlight-stroke'
             ? 12
             : drawingDefaults.strokeWidth,
         strokeOpacity:
-          interaction.tool === 'highlight-stroke'
+          activeInteraction.tool === 'highlight-stroke'
             ? 0.42
             : drawingDefaults.strokeOpacity,
         fillColor: drawingDefaults.fillColor,
         fillOpacity:
-          interaction.tool === 'callout-box' || interaction.tool === 'text'
+          activeInteraction.tool === 'callout-box' ||
+          activeInteraction.tool === 'text'
             ? Math.max(0.18, drawingDefaults.fillOpacity)
             : drawingDefaults.fillOpacity,
         lineCap: 'round',
         lineJoin: 'round',
         dashPattern: drawingDefaults.dashPattern,
-        cornerRadius: interaction.tool === 'rect' ? 0 : 24,
+        cornerRadius: activeInteraction.tool === 'rect' ? 0 : 24,
         polygonSides: 6,
         glowEnabled: drawingDefaults.glowEnabled,
         glowColor: drawingDefaults.glowColor,
@@ -1892,8 +2616,11 @@ export const Canvas2DEditor: React.FC = () => {
       return;
     }
 
-    if (interaction.type !== 'none') {
-      if (interaction.type !== 'pan' && interaction.type !== 'erasing') {
+    if (activeInteraction.type !== 'none') {
+      if (
+        activeInteraction.type !== 'pan' &&
+        activeInteraction.type !== 'erasing'
+      ) {
         pushHistory();
       }
       setInteraction({ type: 'none' });
@@ -1909,7 +2636,148 @@ export const Canvas2DEditor: React.FC = () => {
     }
   };
 
-  // Compact grouped canvas tool strip (organised by Select/Pan, Shapes, Freehand, Annotations, Eraser)
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('[data-hud-overlay="true"]')) {
+      return;
+    }
+    e.preventDefault();
+    const pt = clientToCanvasCoords(e.clientX, e.clientY);
+
+    // 1. Hit-test Drawings from top zIndex to bottom
+    const sortedDrawings = [...drawings]
+      .filter((d) => d.visible && !d.locked)
+      .sort((a, b) => b.zIndex - a.zIndex);
+
+    for (const rawDr of sortedDrawings) {
+      const drTrack = tracks.find((t) => t.targetId === rawDr.id);
+      const dr = resolveDrawingAtFrame(
+        rawDr,
+        drTrack ? drTrack.keyframes : [],
+        currentFrame
+      );
+      const dx = pt.x - dr.x;
+      const dy = pt.y - dr.y;
+      const rad = (-dr.rotation * Math.PI) / 180;
+      const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+      const halfW = (dr.width * dr.scaleX) / 2 + 14;
+      const halfH = (dr.height * dr.scaleY) / 2 + 14;
+      if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        selectDrawing(dr.id);
+        setContextMenu({
+          clientX: e.clientX,
+          clientY: e.clientY,
+          stageX: pt.x,
+          stageY: pt.y,
+        });
+        return;
+      }
+    }
+
+    // 2. Hit-test Webcam Overlays above devices
+    const sortedWebcams = [...webcams]
+      .filter((w) => w.visible && !w.locked)
+      .sort((a, b) => b.zIndex - a.zIndex);
+
+    for (const rawWc of sortedWebcams) {
+      if (rawWc.layerPosition === 'below-devices') continue;
+      const wcTrack = tracks.find((t) => t.targetId === rawWc.id);
+      const wc = resolveWebcamAtFrame(
+        rawWc,
+        wcTrack ? wcTrack.keyframes : [],
+        currentFrame
+      );
+      const dx = pt.x - wc.x;
+      const dy = pt.y - wc.y;
+      const rad = (-wc.rotation * Math.PI) / 180;
+      const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+      const halfW = (wc.width * wc.scaleX) / 2;
+      const halfH = (wc.height * wc.scaleY) / 2;
+      if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        selectWebcam(wc.id);
+        setContextMenu({
+          clientX: e.clientX,
+          clientY: e.clientY,
+          stageX: pt.x,
+          stageY: pt.y,
+        });
+        return;
+      }
+    }
+
+    // 3. Hit-test Devices from top zIndex to bottom
+    const sortedDevices = [...devices]
+      .filter((d) => d.visible && !d.locked)
+      .sort((a, b) => b.zIndex - a.zIndex);
+
+    for (const rawDev of sortedDevices) {
+      const track = tracks.find((t) => t.targetId === rawDev.id);
+      const dev = resolveDeviceAtFrame(
+        rawDev,
+        track ? track.keyframes : [],
+        currentFrame,
+        durationInFrames
+      );
+      const dx = pt.x - dev.x;
+      const dy = pt.y - dev.y;
+      const rad = (-dev.rotation * Math.PI) / 180;
+      const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+      const halfW = (dev.width * dev.scaleX) / 2;
+      const halfH = (dev.height * dev.scaleY) / 2;
+      if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        if (!selectedIds.includes(dev.id)) {
+          selectDevice(dev.id, false);
+        }
+        setContextMenu({
+          clientX: e.clientX,
+          clientY: e.clientY,
+          stageX: pt.x,
+          stageY: pt.y,
+        });
+        return;
+      }
+    }
+
+    // 4. Hit-test Webcam Overlays below devices
+    for (const rawWc of sortedWebcams) {
+      if (rawWc.layerPosition !== 'below-devices') continue;
+      const wcTrack = tracks.find((t) => t.targetId === rawWc.id);
+      const wc = resolveWebcamAtFrame(
+        rawWc,
+        wcTrack ? wcTrack.keyframes : [],
+        currentFrame
+      );
+      const dx = pt.x - wc.x;
+      const dy = pt.y - wc.y;
+      const rad = (-wc.rotation * Math.PI) / 180;
+      const localX = dx * Math.cos(rad) - dy * Math.sin(rad);
+      const localY = dx * Math.sin(rad) + dy * Math.cos(rad);
+      const halfW = (wc.width * wc.scaleX) / 2;
+      const halfH = (wc.height * wc.scaleY) / 2;
+      if (Math.abs(localX) <= halfW && Math.abs(localY) <= halfH) {
+        selectWebcam(wc.id);
+        setContextMenu({
+          clientX: e.clientX,
+          clientY: e.clientY,
+          stageX: pt.x,
+          stageY: pt.y,
+        });
+        return;
+      }
+    }
+
+    // Right-clicked empty canvas stage — open context menu preserving current selection
+    setContextMenu({
+      clientX: e.clientX,
+      clientY: e.clientY,
+      stageX: pt.x,
+      stageY: pt.y,
+    });
+  };
+
+  // Compact grouped canvas tool strip (organised by Select/Marquee/Pan, Shapes, Freehand, Annotations, Eraser)
   const toolGroups: {
     group: string;
     items: {
@@ -1927,6 +2795,12 @@ export const Canvas2DEditor: React.FC = () => {
           label: 'Select & Transform (V)',
           shortLabel: 'Select',
           icon: MousePointer,
+        },
+        {
+          id: 'multi-select',
+          label: 'Marquee Box Select (M / Drag Empty Space)',
+          shortLabel: 'Marquee',
+          icon: Scan,
         },
         {
           id: 'pan',
@@ -2005,16 +2879,61 @@ export const Canvas2DEditor: React.FC = () => {
     (d) => d.id === selectedDrawingId
   );
 
+  const totalSelectedElementsCount =
+    selectedIds.length +
+    Array.from(
+      new Set([
+        ...selectedDrawingIds,
+        ...(selectedDrawingId ? [selectedDrawingId] : []),
+      ])
+    ).length +
+    Array.from(
+      new Set([
+        ...selectedWebcamIds,
+        ...(selectedWebcamId ? [selectedWebcamId] : []),
+      ])
+    ).length;
+
   const stageCursorClass =
     interaction.type === 'pan' || activeDrawingTool === 'pan'
       ? 'cursor-grabbing'
-      : activeDrawingTool === 'select' ||
-          activeDrawingTool === 'multi-select' ||
-          activeDrawingTool === 'transform'
-        ? 'cursor-default'
-        : activeDrawingTool === 'eraser'
-          ? 'cursor-cell'
-          : 'cursor-crosshair';
+      : activeDrawingTool === 'multi-select' || interaction.type === 'marquee'
+        ? 'cursor-crosshair'
+        : activeDrawingTool === 'select' || activeDrawingTool === 'transform'
+          ? 'cursor-default'
+          : activeDrawingTool === 'eraser'
+            ? 'cursor-cell'
+            : 'cursor-crosshair';
+
+  // Calculate viewport-relative marquee overlay box when dragging in empty space
+  const marqueeOverlayRect = (() => {
+    if (interaction.type !== 'marquee') return null;
+    const container = containerRef.current;
+    const canvas = canvasRef.current;
+    if (container && canvas) {
+      const cRect = container.getBoundingClientRect();
+      const sRect = canvas.getBoundingClientRect();
+      const scaleX = sRect.width / Math.max(1, canvasWidth);
+      const scaleY = sRect.height / Math.max(1, canvasHeight);
+      const minX = Math.min(interaction.startX, interaction.currentX);
+      const maxX = Math.max(interaction.startX, interaction.currentX);
+      const minY = Math.min(interaction.startY, interaction.currentY);
+      const maxY = Math.max(interaction.startY, interaction.currentY);
+      const stageW = maxX - minX;
+      const stageH = maxY - minY;
+      if (stageW < 2 && stageH < 2) return null;
+
+      return {
+        left: sRect.left - cRect.left + minX * scaleX,
+        top: sRect.top - cRect.top + minY * scaleY,
+        width: Math.max(2, stageW * scaleX),
+        height: Math.max(2, stageH * scaleY),
+        stageWidth: Math.round(stageW),
+        stageHeight: Math.round(stageH),
+      };
+    }
+    return null;
+  })();
 
   return (
     <div
@@ -2024,35 +2943,40 @@ export const Canvas2DEditor: React.FC = () => {
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onWheel={handleWheel}
+      onContextMenu={handleContextMenu}
       data-testid="canvas-2d-viewport"
       className={`relative flex-1 h-full bg-[#F1F5F9] overflow-hidden select-none touch-none flex items-center justify-center ${stageCursorClass}`}
     >
-      {/* Top Horizontal Pixel Ruler */}
-      {showRulers && (
-        <div
-          aria-hidden="true"
-          className="absolute top-0 left-6 right-0 h-6 bg-white border-b border-slate-200 z-10 flex items-center px-10 text-[10px] font-mono tabular-nums text-slate-400 pointer-events-none"
-        >
-          <span>0px</span>
-          <span className="ml-auto">X: {cursorCoords.x}px</span>
-          <span className="ml-4">Y: {cursorCoords.y}px</span>
-          <span className="ml-auto">{canvasWidth}px</span>
-        </div>
+      {/* Coordinate-Mapped Horizontal & Vertical Viewport Rulers */}
+      {!isPreviewMode && (
+        <ViewportRulers
+          containerRef={containerRef}
+          cursorCoords={cursorCoords}
+          mode="2d"
+        />
       )}
 
-      {/* Left Vertical Pixel Ruler */}
-      {showRulers && (
+      {/* Live Viewport Marquee Selection Overlay Box */}
+      {!isPreviewMode && marqueeOverlayRect && (
         <div
-          aria-hidden="true"
-          className="absolute top-6 bottom-0 left-0 w-6 bg-white border-r border-slate-200 z-10 flex flex-col justify-between py-2 items-center text-[10px] font-mono tabular-nums text-slate-400 pointer-events-none"
+          data-testid="canvas-marquee-selection-box"
+          style={{
+            left: `${marqueeOverlayRect.left}px`,
+            top: `${marqueeOverlayRect.top}px`,
+            width: `${marqueeOverlayRect.width}px`,
+            height: `${marqueeOverlayRect.height}px`,
+          }}
+          className="absolute z-15 pointer-events-none border-2 border-blue-500 bg-blue-500/12 shadow-[0_0_0_1px_rgba(255,255,255,0.6)]"
         >
-          <span>0</span>
-          <span className="-rotate-90">{Math.round(canvasHeight / 2)}</span>
-          <span>{canvasHeight}</span>
+          <span className="absolute -top-6 left-0 px-1.5 py-0.5 rounded bg-slate-900/95 text-white font-mono text-[10px] font-semibold whitespace-nowrap border border-blue-400/60 shadow-xs">
+            {totalSelectedElementsCount} selected ·{' '}
+            {marqueeOverlayRect.stageWidth} × {marqueeOverlayRect.stageHeight}px
+          </span>
         </div>
       )}
 
       {/* Compact White Top-Center Grouped Drawing & Selection Tool Strip */}
+      {!isPreviewMode && (
       <div
         data-hud-overlay="true"
         data-testid="canvas-drawing-toolbar"
@@ -2089,7 +3013,46 @@ export const Canvas2DEditor: React.FC = () => {
           </React.Fragment>
         ))}
 
-        {activeSelectedDrawingObj && (
+        {totalSelectedElementsCount > 1 && (
+          <>
+            <div className="w-px h-4 bg-slate-200 mx-1 shrink-0" />
+            <span
+              data-testid="marquee-multi-select-count"
+              className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono text-[10px] font-semibold whitespace-nowrap shrink-0"
+            >
+              {totalSelectedElementsCount} Selected
+            </span>
+            {selectedIds.length >= 2 && (
+              <button
+                type="button"
+                onClick={groupSelectedDevices}
+                title="Group Selected Devices (Ctrl+G)"
+                data-testid="marquee-group-selected-btn"
+                className="px-1.5 py-0.5 rounded text-[10px] font-semibold text-slate-700 hover:bg-slate-100 transition-colors shrink-0 cursor-pointer"
+              >
+                Group
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={duplicateSelectedDevices}
+              title="Duplicate Selected Elements (Ctrl+D)"
+              className="p-1 rounded-md text-slate-600 hover:bg-slate-100 hover:text-slate-900 transition-colors shrink-0 cursor-pointer"
+            >
+              <Copy className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={deleteSelectedDevices}
+              title="Delete Selected Elements (Del)"
+              className="p-1 rounded-md text-rose-600 hover:bg-rose-50 transition-colors shrink-0 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </>
+        )}
+
+        {totalSelectedElementsCount <= 1 && activeSelectedDrawingObj && (
           <>
             <div className="w-px h-4 bg-slate-200 mx-1 shrink-0" />
             <button
@@ -2111,6 +3074,7 @@ export const Canvas2DEditor: React.FC = () => {
           </>
         )}
       </div>
+      )}
 
       {/* Interactive Scaled Stage Container */}
       <div
@@ -2129,34 +3093,83 @@ export const Canvas2DEditor: React.FC = () => {
         />
       </div>
 
-      {/* Bottom-Right Floating Viewport Zoom Controls */}
+      {/* Bottom-Right Floating Viewport Rulers, Snap-to-Grid & Zoom Controls */}
+      {!isPreviewMode && (
       <div
         data-hud-overlay="true"
         className="absolute bottom-3.5 right-3.5 z-20 flex items-center gap-1 bg-white/95 border border-slate-200 rounded-lg px-2 py-1 shadow-xs"
       >
+        {/* Rulers Toggle */}
         <button
           type="button"
-          onClick={() => setZoomAndPan(Number((zoom - 0.1).toFixed(2)))}
-          aria-label="Zoom out canvas"
-          className="p-1 text-slate-600 hover:text-slate-900 rounded hover:bg-slate-100 transition-colors"
+          onClick={() => setShowRulers(!showRulers)}
+          aria-pressed={showRulers}
+          title="Toggle Viewport Rulers"
+          data-testid="toggle-rulers-2d"
+          className={`px-2 py-0.5 rounded flex items-center gap-1 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+            showRulers
+              ? 'bg-blue-50 text-blue-600 border border-blue-200 font-semibold'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent'
+          }`}
         >
-          <ZoomOut className="w-3.5 h-3.5" />
+          <Ruler className="w-3.5 h-3.5" />
+          <span>Rulers</span>
         </button>
-        <span className="text-xs font-mono tabular-nums text-slate-700 font-semibold px-1.5 min-w-[46px] text-center">
-          {Math.round(zoom * 100)}%
-        </span>
-        <button
-          type="button"
-          onClick={() => setZoomAndPan(Number((zoom + 0.1).toFixed(2)))}
-          aria-label="Zoom in canvas"
-          className="p-1 text-slate-600 hover:text-slate-900 rounded hover:bg-slate-100 transition-colors"
-        >
-          <ZoomIn className="w-3.5 h-3.5" />
-        </button>
+
         <div className="w-px h-4 bg-slate-200 mx-0.5" />
+
+        {/* Snap-to-Grid Toggle */}
         <button
           type="button"
-          onClick={() => {
+          onClick={toggleSnapToGrid}
+          aria-pressed={snapToGrid}
+          title="Toggle Snap to Grid (G)"
+          data-testid="toggle-snap-to-grid-2d"
+          className={`px-2 py-0.5 rounded flex items-center gap-1 text-xs font-medium transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+            snapToGrid
+              ? 'bg-blue-50 text-blue-600 border border-blue-200 font-semibold'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-transparent'
+          }`}
+        >
+          <Grid3X3 className="w-3.5 h-3.5" />
+          <span>Snap</span>
+        </button>
+
+        {/* Configurable Grid Size Selector */}
+        <select
+          aria-label="Grid Size"
+          data-testid="select-grid-size-2d"
+          value={gridSize}
+          onChange={(e) => setGridSize(Number(e.target.value))}
+          title="Grid Snap Interval Size (px)"
+          className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 text-[11px] font-mono tabular-nums text-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer"
+        >
+          <option value={10}>10px</option>
+          <option value={20}>20px</option>
+          <option value={32}>32px</option>
+          <option value={40}>40px</option>
+          <option value={60}>60px</option>
+          <option value={80}>80px</option>
+          <option value={100}>100px</option>
+        </select>
+
+        {(selectedIds.length > 0 || selectedDrawingId || selectedWebcamId) && (
+          <button
+            type="button"
+            onClick={snapSelectedToGrid}
+            title={`Align selected element to ${gridSize}px grid`}
+            data-testid="align-selection-to-grid-2d"
+            className="px-1.5 py-0.5 text-[11px] font-medium text-blue-600 hover:bg-blue-50 rounded transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          >
+            Align
+          </button>
+        )}
+
+        <div className="w-px h-4 bg-slate-200 mx-0.5" />
+
+        <ViewportZoomSlider
+          cursorCoords={cursorCoords}
+          onFitStage={() => {
             const container = containerRef.current;
             if (container) {
               const fitW = (container.clientWidth - 96) / canvasWidth;
@@ -2170,15 +3183,16 @@ export const Canvas2DEditor: React.FC = () => {
               setZoomAndPan(0.38, 0, 0);
             }
           }}
-          aria-label="Reset canvas zoom and pan"
-          className="px-2 py-0.5 text-xs font-medium text-slate-700 hover:text-blue-600 rounded hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0"
-        >
-          Fit Stage
-        </button>
+        />
       </div>
+      )}
 
       {/* Bottom-Left Quick Gesture & Onion Skin Legend */}
-      <div className="absolute bottom-3.5 left-9 z-20 hidden lg:flex items-center gap-2.5 text-[11px] text-slate-600 bg-white/95 border border-slate-200 rounded-lg px-3 py-1 shadow-xs pointer-events-none">
+      {!isPreviewMode && (
+      <div
+        data-hud-overlay="true"
+        className="absolute bottom-3.5 left-9 z-20 hidden lg:flex items-center gap-2.5 text-[11px] text-slate-600 bg-white/95 border border-slate-200 rounded-lg px-3 py-1 shadow-xs"
+      >
         {showMotionTrail ? (
           <div
             data-testid="onion-skin-hud-badge"
@@ -2219,7 +3233,31 @@ export const Canvas2DEditor: React.FC = () => {
             </span>
           </>
         )}
+        <span aria-hidden="true" className="text-slate-300">
+          |
+        </span>
+        <button
+          type="button"
+          onClick={() =>
+            useStudioStore.getState().setActiveModal('shortcuts')
+          }
+          className="text-blue-600 hover:text-blue-700 font-medium hover:underline cursor-pointer whitespace-nowrap"
+        >
+          Shortcuts (?)
+        </button>
       </div>
+      )}
+
+      {/* Right-Click Viewport Context Menu */}
+      {!isPreviewMode && contextMenu && (
+        <ViewportContextMenu
+          clientX={contextMenu.clientX}
+          clientY={contextMenu.clientY}
+          stageX={contextMenu.stageX}
+          stageY={contextMenu.stageY}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 };

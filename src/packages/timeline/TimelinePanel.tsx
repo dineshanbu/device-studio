@@ -11,12 +11,14 @@ import {
   Eye,
   EyeOff,
   Film,
+  History,
   Lock,
   Maximize2,
   Pause,
   PenTool,
   Play,
   Plus,
+  Redo2,
   Repeat,
   RotateCcw,
   Scissors,
@@ -24,6 +26,7 @@ import {
   SkipForward,
   Spline,
   Trash2,
+  Undo2,
   Unlock,
   Volume2,
   VolumeX,
@@ -120,6 +123,11 @@ export const TimelinePanel: React.FC = () => {
     deleteKeyframe,
     updateKeyframeEasing,
     applyAnimationPresetToDevice,
+    history,
+    historyIndex,
+    syncPlayheadOnHistoryScrub,
+    setSyncPlayheadOnHistoryScrub,
+    scrubToHistoryIndex,
     pushHistory,
     undo,
     redo,
@@ -134,6 +142,8 @@ export const TimelinePanel: React.FC = () => {
   const [scrollOffset, setScrollOffset] = useState<number>(0);
   const [isSpacePressed, setIsSpacePressed] = useState<boolean>(false);
   const [isScrubbingRuler, setIsScrubbingRuler] = useState<boolean>(false);
+  const [historyScrubOpen, setHistoryScrubOpen] = useState<boolean>(false);
+  const historyScrubPopoverRef = useRef<HTMLDivElement | null>(null);
   const [isDraggingScrollbar, setIsDraggingScrollbar] = useState<{
     startX: number;
     startScrollLeft: number;
@@ -812,6 +822,129 @@ export const TimelinePanel: React.FC = () => {
   const totalTimecode = formatTimecode(durationInFrames, fps);
   const playheadPx = frameToPixel(currentFrame, timelineZoom, 0, fps);
 
+  // Close History Scrub popover on outside click or Escape
+  useEffect(() => {
+    if (!historyScrubOpen) return;
+    const handlePointerDownOutside = (e: PointerEvent) => {
+      if (
+        historyScrubPopoverRef.current &&
+        !historyScrubPopoverRef.current.contains(e.target as Node)
+      ) {
+        setHistoryScrubOpen(false);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setHistoryScrubOpen(false);
+      }
+    };
+    window.addEventListener('pointerdown', handlePointerDownOutside, true);
+    window.addEventListener('keydown', handleEsc, true);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDownOutside, true);
+      window.removeEventListener('keydown', handleEsc, true);
+    };
+  }, [historyScrubOpen]);
+
+  // Compute History Scrub metrics relative to current playhead position
+  const historyScrubMetrics = useMemo(() => {
+    const safeHistory = history.length > 0 ? history : [];
+    const clampedIdx = Math.max(
+      0,
+      Math.min(Math.max(0, safeHistory.length - 1), historyIndex)
+    );
+    const activeSnap = safeHistory[clampedIdx] || null;
+    const prevUndoSnap = clampedIdx > 0 ? safeHistory[clampedIdx - 1] : null;
+    const nextRedoSnap =
+      clampedIdx < safeHistory.length - 1 ? safeHistory[clampedIdx + 1] : null;
+
+    const activeHistoryFrame = Math.max(
+      0,
+      Math.min(durationInFrames - 1, activeSnap?.frame ?? 0)
+    );
+    const deltaFromActive = currentFrame - activeHistoryFrame;
+    const deltaSeconds = (deltaFromActive / Math.max(1, fps)).toFixed(2);
+    const activeHistoryPx = frameToPixel(
+      activeHistoryFrame,
+      timelineZoom,
+      0,
+      fps
+    );
+
+    const nextRedoFrame =
+      nextRedoSnap !== null
+        ? Math.max(0, Math.min(durationInFrames - 1, nextRedoSnap.frame ?? 0))
+        : null;
+    const nextRedoPx =
+      nextRedoFrame !== null
+        ? frameToPixel(nextRedoFrame, timelineZoom, 0, fps)
+        : null;
+    const deltaToNextRedo =
+      nextRedoFrame !== null ? currentFrame - nextRedoFrame : null;
+
+    // Recent window of up to 8 history steps around historyIndex for the mini scrub track
+    const windowSize = 8;
+    const halfWindow = Math.floor(windowSize / 2);
+    let startIdx = Math.max(0, clampedIdx - halfWindow);
+    const endIdx = Math.min(safeHistory.length, startIdx + windowSize);
+    if (endIdx - startIdx < windowSize) {
+      startIdx = Math.max(0, endIdx - windowSize);
+    }
+
+    const recentNodes = safeHistory.slice(startIdx, endIdx).map((snap, i) => {
+      const globalIdx = startIdx + i;
+      const snapFrame = Math.max(
+        0,
+        Math.min(durationInFrames - 1, snap.frame ?? 0)
+      );
+      const status: 'undo' | 'active' | 'redo' =
+        globalIdx < clampedIdx
+          ? 'undo'
+          : globalIdx === clampedIdx
+            ? 'active'
+            : 'redo';
+      return {
+        globalIdx,
+        stepNumber: globalIdx + 1,
+        id: snap.id || `hist-${globalIdx}`,
+        label: snap.label || `Step ${globalIdx + 1}`,
+        frame: snapFrame,
+        pixelLeft: frameToPixel(snapFrame, timelineZoom, 0, fps),
+        deltaFrames: currentFrame - snapFrame,
+        status,
+      };
+    });
+
+    const playheadRatio = Math.max(
+      0,
+      Math.min(1, currentFrame / Math.max(1, durationInFrames - 1))
+    );
+    const activeHistoryRatio = Math.max(
+      0,
+      Math.min(1, activeHistoryFrame / Math.max(1, durationInFrames - 1))
+    );
+
+    return {
+      totalSteps: safeHistory.length,
+      activeStepNumber: clampedIdx + 1,
+      undoCount: clampedIdx,
+      redoCount: Math.max(0, safeHistory.length - 1 - clampedIdx),
+      activeSnap,
+      prevUndoSnap,
+      nextRedoSnap,
+      activeHistoryFrame,
+      activeHistoryPx,
+      deltaFromActive,
+      deltaSeconds,
+      nextRedoFrame,
+      nextRedoPx,
+      deltaToNextRedo,
+      recentNodes,
+      playheadRatio,
+      activeHistoryRatio,
+    };
+  }, [history, historyIndex, currentFrame, durationInFrames, fps, timelineZoom]);
+
   const rulerTicks = useMemo(
     () => computeAdaptiveRulerTicks(durationInFrames, fps, timelineZoom),
     [durationInFrames, fps, timelineZoom]
@@ -991,6 +1124,149 @@ export const TimelinePanel: React.FC = () => {
             <span className="text-slate-400 text-[10px]">
               /{durationInFrames}f
             </span>
+          </div>
+
+          {/* Visual History Scrub Indicator (Playhead Position vs Recent Undo/Redo Actions) */}
+          <div
+            data-testid="timeline-history-scrub-indicator"
+            className="flex items-center gap-1 bg-white border border-slate-200 rounded-md px-1.5 py-0.5 ml-1 shadow-2xs"
+          >
+            {/* Quick Undo Button */}
+            <button
+              type="button"
+              data-testid="timeline-history-undo"
+              disabled={historyScrubMetrics.undoCount <= 0}
+              onClick={undo}
+              aria-label="Undo last action on timeline"
+              title={
+                historyScrubMetrics.prevUndoSnap
+                  ? `Undo to Step ${historyScrubMetrics.activeStepNumber - 1}: ${historyScrubMetrics.prevUndoSnap.label} (F${String(historyScrubMetrics.prevUndoSnap.frame).padStart(3, '0')})`
+                  : 'No earlier undo steps'
+              }
+              className="p-0.5 rounded text-slate-600 hover:text-violet-700 hover:bg-violet-50 disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
+            >
+              <Undo2 className="w-3 h-3" />
+            </button>
+
+            {/* Interactive Mini History Scrub Track (Playhead vs Undo/Redo Frame Positions) */}
+            <div
+              data-testid="timeline-history-scrub-bar"
+              onClick={() => {
+                setIsPlaying(false);
+                setCurrentFrame(historyScrubMetrics.activeHistoryFrame);
+              }}
+              title={`History Scrub Radar — Playhead F${String(currentFrame).padStart(3, '0')} vs Active History Step #${historyScrubMetrics.activeStepNumber} "${historyScrubMetrics.activeSnap?.label || 'Scene'}" at F${String(historyScrubMetrics.activeHistoryFrame).padStart(3, '0')} (${
+                historyScrubMetrics.deltaFromActive === 0
+                  ? 'Playhead aligned with action frame'
+                  : historyScrubMetrics.deltaFromActive > 0
+                    ? `Playhead is +${historyScrubMetrics.deltaFromActive}f (+${historyScrubMetrics.deltaSeconds}s) ahead of action`
+                    : `Playhead is ${historyScrubMetrics.deltaFromActive}f (${historyScrubMetrics.deltaSeconds}s) behind action`
+              }). Click to jump playhead to action frame.`}
+              className="w-20 h-4 bg-slate-100 border border-slate-200/90 rounded-sm relative flex items-center px-1 cursor-pointer group overflow-hidden"
+            >
+              {/* Span Connector between Active History Frame & Current Playhead */}
+              <div
+                data-testid="history-scrub-mini-tether"
+                style={{
+                  left: `${(Math.min(historyScrubMetrics.activeHistoryRatio, historyScrubMetrics.playheadRatio) * 100).toFixed(1)}%`,
+                  width: `${Math.max(2, Math.abs(historyScrubMetrics.playheadRatio - historyScrubMetrics.activeHistoryRatio) * 100).toFixed(1)}%`,
+                }}
+                className={`absolute h-1 rounded-full transition-all ${
+                  historyScrubMetrics.deltaFromActive === 0
+                    ? 'bg-emerald-500'
+                    : 'bg-gradient-to-r from-violet-500 to-rose-500 opacity-75'
+                }`}
+              />
+
+              {/* Recent Undo / Active / Redo Action Frame Markers on Mini Track */}
+              {historyScrubMetrics.recentNodes.map((node) => {
+                const nodeRatio = Math.max(
+                  0.04,
+                  Math.min(0.96, node.frame / Math.max(1, durationInFrames - 1))
+                );
+                return (
+                  <button
+                    key={node.id}
+                    type="button"
+                    data-testid={`history-scrub-node-${node.globalIdx}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      scrubToHistoryIndex(node.globalIdx, true);
+                    }}
+                    title={`Step #${node.stepNumber} (${node.status.toUpperCase()}): ${node.label} at F${String(node.frame).padStart(3, '0')} | Playhead Δ: ${node.deltaFrames >= 0 ? `+${node.deltaFrames}f` : `${node.deltaFrames}f`} (Click to restore & sync playhead)`}
+                    style={{ left: `${(nodeRatio * 100).toFixed(1)}%` }}
+                    className={`absolute -translate-x-1/2 rounded-full transition-transform hover:scale-125 cursor-pointer ${
+                      node.status === 'active'
+                        ? 'w-2 h-2 bg-violet-600 ring-2 ring-violet-300 z-20'
+                        : node.status === 'redo'
+                          ? 'w-1.5 h-1.5 bg-amber-500 ring-1 ring-amber-200 z-10'
+                          : 'w-1.5 h-1.5 bg-indigo-500 opacity-85 z-10'
+                    }`}
+                  />
+                );
+              })}
+
+              {/* Live Playhead Pip on Mini History Scrub Track */}
+              <div
+                data-testid="history-scrub-playhead-pip"
+                style={{
+                  left: `${(historyScrubMetrics.playheadRatio * 100).toFixed(1)}%`,
+                }}
+                className="absolute top-0 bottom-0 w-0.5 bg-rose-600 -translate-x-1/2 z-30 pointer-events-none"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-rose-600 -translate-x-[2px] -translate-y-[1px]" />
+              </div>
+            </div>
+
+            {/* Quick Redo Button */}
+            <button
+              type="button"
+              data-testid="timeline-history-redo"
+              disabled={historyScrubMetrics.redoCount <= 0}
+              onClick={redo}
+              aria-label="Redo action on timeline"
+              title={
+                historyScrubMetrics.nextRedoSnap
+                  ? `Redo to Step ${historyScrubMetrics.activeStepNumber + 1}: ${historyScrubMetrics.nextRedoSnap.label} (F${String(historyScrubMetrics.nextRedoSnap.frame).padStart(3, '0')})`
+                  : 'No undone redo steps'
+              }
+              className="p-0.5 rounded text-slate-600 hover:text-amber-700 hover:bg-amber-50 disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
+            >
+              <Redo2 className="w-3 h-3" />
+            </button>
+
+            {/* Relative Frame Delta Badge & History Inspector Toggle */}
+            <button
+              type="button"
+              data-testid="timeline-history-delta-badge"
+              aria-expanded={historyScrubOpen}
+              onClick={() => setHistoryScrubOpen((prev) => !prev)}
+              title="Open History Scrub Inspector — Compare playhead position against recent Undo/Redo actions and scrub through edit history"
+              className={`px-1.5 py-0.5 rounded text-[10px] font-mono tabular-nums flex items-center gap-1 border transition-colors cursor-pointer ${
+                historyScrubOpen
+                  ? 'bg-violet-600 text-white border-violet-700 font-semibold'
+                  : historyScrubMetrics.deltaFromActive === 0
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 font-semibold'
+                    : 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100 font-semibold'
+              }`}
+            >
+              <History className="w-2.5 h-2.5 shrink-0" />
+              <span>
+                H{historyScrubMetrics.activeStepNumber}/
+                {historyScrubMetrics.totalSteps}
+              </span>
+              <span className="opacity-60">·</span>
+              <span data-testid="history-scrub-delta-text">
+                {historyScrubMetrics.deltaFromActive === 0
+                  ? `At F${String(historyScrubMetrics.activeHistoryFrame).padStart(3, '0')}`
+                  : `${historyScrubMetrics.deltaFromActive > 0 ? `+${historyScrubMetrics.deltaFromActive}` : historyScrubMetrics.deltaFromActive}f vs F${String(historyScrubMetrics.activeHistoryFrame).padStart(3, '0')}`}
+              </span>
+              {historyScrubMetrics.redoCount > 0 && (
+                <span className="px-1 rounded bg-amber-100 text-amber-800 text-[9px] font-bold">
+                  +{historyScrubMetrics.redoCount}R
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
@@ -1332,6 +1608,193 @@ export const TimelinePanel: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Interactive Floating History Scrub Popover */}
+      {historyScrubOpen && (
+        <div
+          ref={historyScrubPopoverRef}
+          data-testid="history-scrub-popover"
+          role="dialog"
+          aria-label="Timeline History Scrub Inspector"
+          className="fixed bottom-74 left-52 w-96 bg-white border border-slate-200 rounded-xl shadow-[0_16px_38px_rgba(15,23,42,0.18)] p-3 z-50 text-xs text-slate-800 space-y-2.5"
+        >
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <div className="flex items-center gap-1.5">
+              <div className="w-5 h-5 rounded-md bg-violet-100 text-violet-700 flex items-center justify-center">
+                <History className="w-3.5 h-3.5" />
+              </div>
+              <div>
+                <div className="font-semibold text-slate-900 leading-tight">
+                  Timeline History Scrub
+                </div>
+                <div className="text-[10px] text-slate-500">
+                  Playhead F{String(currentFrame).padStart(3, '0')} vs Undo / Redo Action Frames
+                </div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                setSyncPlayheadOnHistoryScrub(!syncPlayheadOnHistoryScrub)
+              }
+              aria-pressed={syncPlayheadOnHistoryScrub}
+              data-testid="toggle-sync-playhead-history"
+              title="When enabled, Undo/Redo or History Scrubbing automatically jumps the playhead to the action's frame"
+              className={`px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold border transition-colors cursor-pointer ${
+                syncPlayheadOnHistoryScrub
+                  ? 'bg-violet-50 border-violet-300 text-violet-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              Sync Playhead: {syncPlayheadOnHistoryScrub ? 'ON' : 'OFF'}
+            </button>
+          </div>
+
+          {/* Current Playhead vs Active History Action Comparison Card */}
+          <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-2 space-y-1.5">
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="text-slate-500 font-medium">
+                Active Action (#{historyScrubMetrics.activeStepNumber}):
+              </span>
+              <span className="font-semibold text-violet-700 truncate max-w-[180px]">
+                {historyScrubMetrics.activeSnap?.label || 'Initial Scene'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] font-mono tabular-nums">
+              <span className="text-slate-600">
+                Action Frame:{' '}
+                <strong className="text-violet-700">
+                  F{String(historyScrubMetrics.activeHistoryFrame).padStart(3, '0')}
+                </strong>{' '}
+                ({formatShortTimecode(historyScrubMetrics.activeHistoryFrame, fps)})
+              </span>
+              <span className="text-slate-600">
+                Playhead:{' '}
+                <strong className="text-rose-600">
+                  F{String(currentFrame).padStart(3, '0')}
+                </strong>{' '}
+                ({formatShortTimecode(currentFrame, fps)})
+              </span>
+            </div>
+            <div className="flex items-center justify-between pt-1 border-t border-slate-200/70">
+              <span
+                className={`text-[10px] font-mono font-semibold ${
+                  historyScrubMetrics.deltaFromActive === 0
+                    ? 'text-emerald-700'
+                    : 'text-violet-700'
+                }`}
+              >
+                {historyScrubMetrics.deltaFromActive === 0
+                  ? 'Playhead aligned with action frame (Δ 0f)'
+                  : historyScrubMetrics.deltaFromActive > 0
+                    ? `Playhead is +${historyScrubMetrics.deltaFromActive}f (+${historyScrubMetrics.deltaSeconds}s) after action`
+                    : `Playhead is ${historyScrubMetrics.deltaFromActive}f (${historyScrubMetrics.deltaSeconds}s) before action`}
+              </span>
+              <button
+                type="button"
+                data-testid="jump-playhead-to-history-frame"
+                onClick={() => {
+                  setIsPlaying(false);
+                  setCurrentFrame(historyScrubMetrics.activeHistoryFrame);
+                }}
+                className="px-2 py-0.5 rounded bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-mono font-semibold transition-colors cursor-pointer"
+              >
+                Jump to F{String(historyScrubMetrics.activeHistoryFrame).padStart(3, '0')}
+              </button>
+            </div>
+          </div>
+
+          {/* Continuous Undo/Redo State Scrubber Slider */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between text-[10px] font-mono text-slate-500">
+              <span>
+                Scrub Undo / Redo States ({historyScrubMetrics.activeStepNumber}/
+                {historyScrubMetrics.totalSteps})
+              </span>
+              <span>
+                {historyScrubMetrics.undoCount} Undo ·{' '}
+                {historyScrubMetrics.redoCount} Redo
+              </span>
+            </div>
+            <input
+              type="range"
+              aria-label="History State Scrubber"
+              data-testid="history-state-scrubber-slider"
+              min={0}
+              max={Math.max(0, historyScrubMetrics.totalSteps - 1)}
+              step={1}
+              value={historyIndex}
+              onChange={(e) =>
+                scrubToHistoryIndex(
+                  Number(e.target.value),
+                  syncPlayheadOnHistoryScrub
+                )
+              }
+              className="w-full accent-violet-600 cursor-pointer h-1.5"
+            />
+          </div>
+
+          {/* Recent Undo / Active / Redo Action Timeline List */}
+          <div className="max-h-40 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-lg">
+            {history.map((snap, idx) => {
+              const snapFrame = Math.max(
+                0,
+                Math.min(durationInFrames - 1, snap.frame ?? 0)
+              );
+              const delta = currentFrame - snapFrame;
+              const isCurrent = idx === historyIndex;
+              const isRedo = idx > historyIndex;
+              return (
+                <div
+                  key={snap.id || idx}
+                  data-testid={`history-scrub-list-item-${idx}`}
+                  onClick={() => scrubToHistoryIndex(idx, true)}
+                  className={`px-2.5 py-1.5 flex items-center justify-between text-[11px] cursor-pointer transition-colors ${
+                    isCurrent
+                      ? 'bg-violet-50 text-violet-950 font-semibold'
+                      : isRedo
+                        ? 'bg-amber-50/40 text-slate-600 hover:bg-amber-50'
+                        : 'bg-white text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 truncate">
+                    <span
+                      className={`px-1 py-0.2 rounded text-[9px] font-mono font-bold ${
+                        isCurrent
+                          ? 'bg-violet-600 text-white'
+                          : isRedo
+                            ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                            : 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                      }`}
+                    >
+                      {isCurrent ? `H${idx + 1}` : isRedo ? `R${idx + 1}` : `U${idx + 1}`}
+                    </span>
+                    <span className="truncate">{snap.label || `Step ${idx + 1}`}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 font-mono text-[10px] tabular-nums shrink-0">
+                    <span className="text-slate-500">
+                      F{String(snapFrame).padStart(3, '0')}
+                    </span>
+                    <span
+                      className={`px-1 rounded text-[9px] ${
+                        delta === 0
+                          ? 'bg-emerald-100 text-emerald-800 font-bold'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {delta === 0
+                        ? 'At Playhead'
+                        : delta > 0
+                          ? `Playhead +${delta}f`
+                          : `Playhead ${delta}f`}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Track Headers + Interactive Scrubber Lanes */}
       {!timelineCollapsed && (
@@ -1891,12 +2354,72 @@ export const TimelinePanel: React.FC = () => {
                 }}
                 className="flex-1 flex flex-col relative"
               >
-                {/* Adaptive Time & Frame Ruler with Pixel-Exact Ticks */}
+                {/* Adaptive Time & Frame Ruler with Pixel-Exact Ticks + History Scrub Markers */}
                 <div
                   data-testid="timeline-ruler"
                   onMouseDown={handleRulerScrubStart}
                   className="h-6 border-b border-slate-200 bg-slate-100/90 relative cursor-ew-resize flex items-center sticky top-0 z-20"
                 >
+                  {/* Visual History Scrub Tether connecting Active Undo/Redo Frame to Current Playhead */}
+                  <div
+                    data-testid="timeline-history-scrub-tether"
+                    style={{
+                      left: `${Math.min(historyScrubMetrics.activeHistoryPx, playheadPx)}px`,
+                      width: `${Math.max(2, Math.abs(playheadPx - historyScrubMetrics.activeHistoryPx))}px`,
+                    }}
+                    className={`absolute top-0.5 h-1 rounded-full pointer-events-none z-20 transition-all ${
+                      historyScrubMetrics.deltaFromActive === 0
+                        ? 'bg-emerald-500'
+                        : 'bg-gradient-to-r from-violet-500 via-fuchsia-500 to-rose-500 opacity-85'
+                    }`}
+                  />
+
+                  {/* Optional Dashed Redo Tether when undone Redo steps exist */}
+                  {historyScrubMetrics.nextRedoPx !== null && (
+                    <div
+                      data-testid="timeline-history-redo-tether"
+                      style={{
+                        left: `${Math.min(historyScrubMetrics.nextRedoPx, playheadPx)}px`,
+                        width: `${Math.max(2, Math.abs(playheadPx - historyScrubMetrics.nextRedoPx))}px`,
+                      }}
+                      className="absolute top-1.5 h-0.5 border-t border-dashed border-amber-500 pointer-events-none z-20"
+                    />
+                  )}
+
+                  {/* Interactive Recent Undo / Active / Redo History Pins on the Timeline Ruler */}
+                  {historyScrubMetrics.recentNodes.map((node) => (
+                    <button
+                      key={`ruler-hist-${node.id}`}
+                      type="button"
+                      data-testid={`timeline-ruler-history-pin-${node.globalIdx}`}
+                      style={{ left: `${node.pixelLeft}px` }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsPlaying(false);
+                        if (e.shiftKey) {
+                          scrubToHistoryIndex(node.globalIdx, true);
+                        } else {
+                          setCurrentFrame(node.frame);
+                        }
+                      }}
+                      title={`${node.status === 'active' ? 'Active History State' : node.status === 'redo' ? 'Redo Action' : 'Undo Action'} #${node.stepNumber}: ${node.label} at F${String(node.frame).padStart(3, '0')} | Playhead Δ: ${node.deltaFrames >= 0 ? `+${node.deltaFrames}f` : `${node.deltaFrames}f`} (Click to jump playhead · Shift+Click to scrub undo/redo state)`}
+                      className={`absolute top-0 -translate-x-1/2 px-1 py-0.2 rounded-b text-[8px] font-mono font-bold leading-none z-25 cursor-pointer shadow-2xs transition-transform hover:scale-110 ${
+                        node.status === 'active'
+                          ? 'bg-violet-600 text-white border border-violet-300'
+                          : node.status === 'redo'
+                            ? 'bg-amber-500 text-white border border-amber-200'
+                            : 'bg-indigo-600/90 text-white'
+                      }`}
+                    >
+                      {node.status === 'redo'
+                        ? `R${node.stepNumber}`
+                        : `H${node.stepNumber}`}
+                    </button>
+                  ))}
+
                   {rulerTicks.map((tick) => (
                     <div
                       key={tick.frame}
@@ -2537,22 +3060,35 @@ export const TimelinePanel: React.FC = () => {
                   </div>
                 )}
 
-                {/* High-Contrast Playhead Line & Draggable Handle */}
+                {/* High-Contrast Playhead Line & Draggable Handle with Relative History Scrub Offset */}
                 <div
                   data-testid="timeline-playhead"
                   style={{ left: `${playheadPx}px` }}
                   className="absolute top-0 bottom-0 w-0.5 bg-rose-500 pointer-events-none z-30"
                 >
                   <div
-                    className={`inline-block w-max px-1.5 py-0.5 ${
+                    className={`inline-flex items-center gap-1 w-max px-1.5 py-0.5 ${
                       playheadPx < 48
                         ? 'translate-x-0'
-                        : playheadPx > metrics.totalWidthPx - 96
+                        : playheadPx > metrics.totalWidthPx - 128
                           ? '-translate-x-full'
                           : '-translate-x-1/2'
                     } bg-rose-600 text-white text-[9px] font-mono font-bold rounded-b shadow-sm whitespace-nowrap`}
                   >
-                    F{currentFrame} · {formatShortTimecode(currentFrame, fps)}
+                    <span>
+                      F{currentFrame} · {formatShortTimecode(currentFrame, fps)}
+                    </span>
+                    <span
+                      data-testid="playhead-history-offset"
+                      className="px-1 rounded-xs bg-rose-800/90 text-rose-100 text-[8px] font-mono"
+                    >
+                      H{historyScrubMetrics.activeStepNumber}{' '}
+                      {historyScrubMetrics.deltaFromActive === 0
+                        ? '±0f'
+                        : historyScrubMetrics.deltaFromActive > 0
+                          ? `+${historyScrubMetrics.deltaFromActive}f`
+                          : `${historyScrubMetrics.deltaFromActive}f`}
+                    </span>
                   </div>
                 </div>
               </div>

@@ -8,11 +8,15 @@ import { Canvas3DSimulator } from './packages/render-3d/Canvas3DSimulator.tsx';
 import { TimelinePanel } from './packages/timeline/TimelinePanel.tsx';
 import { ExportModal } from './packages/export/ExportModal.tsx';
 import { ProjectManagerModal } from './packages/editor/ProjectManagerModal.tsx';
+import { ShortcutsModal } from './packages/editor/ShortcutsModal.tsx';
 import { useStudioStore } from './packages/scene-engine/store.ts';
 
 export function App() {
   const {
     editorMode,
+    setEditorMode,
+    activeModal,
+    setActiveModal,
     isPlaying,
     fps,
     durationInFrames,
@@ -29,6 +33,7 @@ export function App() {
     groupSelectedDevices,
     ungroupSelectedDevices,
     stepFrame,
+    jumpToAdjacentKeyframe,
     addKeyframeAtCurrentFrame,
     selectedIds,
     selectedDrawingId,
@@ -38,6 +43,13 @@ export function App() {
     saveCurrentProject,
     splitSelectedClipAtPlayhead,
     trimSelectedClipToPlayhead,
+    setActiveDrawingTool,
+    toggleMotionTrail,
+    setZoomAndPan,
+    toggleSnapToGrid,
+    isPreviewMode,
+    setIsPreviewMode,
+    togglePreviewMode,
   } = useStudioStore();
 
   const [leftCollapsed, setLeftCollapsed] = useState(false);
@@ -86,12 +98,36 @@ export function App() {
   // Global Studio Keyboard Shortcuts
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        const currentModal = useStudioStore.getState().activeModal;
+        if (currentModal !== 'none') {
+          e.preventDefault();
+          setActiveModal('none');
+          return;
+        }
+        if (useStudioStore.getState().isPreviewMode) {
+          e.preventDefault();
+          setIsPreviewMode(false);
+          return;
+        }
+        setActiveDrawingTool('select');
+        return;
+      }
+
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-      if (e.code === 'Space') {
+      if (e.key === '?' || e.key === 'F1') {
+        e.preventDefault();
+        const currentModal = useStudioStore.getState().activeModal;
+        setActiveModal(currentModal === 'shortcuts' ? 'none' : 'shortcuts');
+      } else if (e.code === 'Space') {
         e.preventDefault();
         setIsPlaying(!useStudioStore.getState().isPlaying);
+      } else if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        const mode = useStudioStore.getState().editorMode;
+        setEditorMode(mode === '2d' ? '3d' : '2d');
       } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) redo();
@@ -130,7 +166,13 @@ export function App() {
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
         stepFrame(e.shiftKey ? 10 : 1);
-      } else if (e.key.toLowerCase() === 'k') {
+      } else if (e.key === ',') {
+        e.preventDefault();
+        jumpToAdjacentKeyframe('prev');
+      } else if (e.key === '.') {
+        e.preventDefault();
+        jumpToAdjacentKeyframe('next');
+      } else if (e.key.toLowerCase() === 'k' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         const target =
           selectedWebcamId || selectedDrawingId || selectedIds[0];
@@ -144,12 +186,62 @@ export function App() {
       } else if (e.key === ']') {
         e.preventDefault();
         trimSelectedClipToPlayhead('right');
+      } else if (e.key.toLowerCase() === 'm' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        toggleMotionTrail();
+      } else if (e.key.toLowerCase() === 'g' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        toggleSnapToGrid();
+      } else if (
+        (e.key === '\\' || (e.shiftKey && e.key.toLowerCase() === 'p')) &&
+        !e.metaKey &&
+        !e.ctrlKey
+      ) {
+        e.preventDefault();
+        togglePreviewMode();
+      } else if (e.key.toLowerCase() === 'v' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveDrawingTool('select');
+      } else if (e.key.toLowerCase() === 'h' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveDrawingTool('pan');
+      } else if (e.key.toLowerCase() === 'r' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveDrawingTool('rounded-rect');
+      } else if (e.key.toLowerCase() === 'o' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveDrawingTool('circle');
+      } else if (e.key.toLowerCase() === 'a' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveDrawingTool('arrow');
+      } else if (e.key.toLowerCase() === 'b' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveDrawingTool('brush');
+      } else if (e.key.toLowerCase() === 't' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveDrawingTool('text');
+      } else if (e.key.toLowerCase() === 'e' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setActiveDrawingTool('eraser');
+      } else if ((e.key === '=' || e.key === '+') && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        const curZoom = useStudioStore.getState().zoom;
+        setZoomAndPan(Number((curZoom + 0.1).toFixed(2)));
+      } else if (e.key === '-' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        const curZoom = useStudioStore.getState().zoom;
+        setZoomAndPan(Number((curZoom - 0.1).toFixed(2)));
+      } else if (e.key === '0' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setZoomAndPan(0.45, 0, 0);
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
+    setActiveModal,
+    setEditorMode,
     setIsPlaying,
     undo,
     redo,
@@ -162,6 +254,7 @@ export function App() {
     deleteDrawing,
     deleteWebcam,
     stepFrame,
+    jumpToAdjacentKeyframe,
     addKeyframeAtCurrentFrame,
     selectedIds,
     selectedDrawingId,
@@ -170,6 +263,12 @@ export function App() {
     saveCurrentProject,
     splitSelectedClipAtPlayhead,
     trimSelectedClipToPlayhead,
+    setActiveDrawingTool,
+    toggleMotionTrail,
+    setZoomAndPan,
+    toggleSnapToGrid,
+    setIsPreviewMode,
+    togglePreviewMode,
   ]);
 
   return (
@@ -186,30 +285,42 @@ export function App() {
 
         {/* Center Viewport with subtle panel toggle handles */}
         <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
-          {/* Subtle Left/Right Sidebar Collapse Toggles in top corners of viewport */}
-          <button
-            onClick={() => setLeftCollapsed(!leftCollapsed)}
-            title={leftCollapsed ? 'Expand Left Asset Sidebar' : 'Collapse Left Asset Sidebar'}
-            className="absolute top-2.5 left-2.5 z-20 p-1.5 rounded-md bg-white/90 hover:bg-white text-slate-600 hover:text-slate-900 border border-slate-200/90 shadow-2xs transition-colors"
-          >
-            {leftCollapsed ? (
-              <PanelLeftOpen className="w-3.5 h-3.5" />
-            ) : (
-              <PanelLeftClose className="w-3.5 h-3.5" />
-            )}
-          </button>
+          {/* Subtle Left/Right Sidebar Collapse Toggles in top corners of viewport (hidden in Export Preview Mode) */}
+          {!isPreviewMode && (
+            <>
+              <button
+                onClick={() => setLeftCollapsed(!leftCollapsed)}
+                title={
+                  leftCollapsed
+                    ? 'Expand Left Asset Sidebar'
+                    : 'Collapse Left Asset Sidebar'
+                }
+                className="absolute top-2.5 left-2.5 z-20 p-1.5 rounded-md bg-white/90 hover:bg-white text-slate-600 hover:text-slate-900 border border-slate-200/90 shadow-2xs transition-colors"
+              >
+                {leftCollapsed ? (
+                  <PanelLeftOpen className="w-3.5 h-3.5" />
+                ) : (
+                  <PanelLeftClose className="w-3.5 h-3.5" />
+                )}
+              </button>
 
-          <button
-            onClick={() => setRightCollapsed(!rightCollapsed)}
-            title={rightCollapsed ? 'Expand Right Inspector' : 'Collapse Right Inspector'}
-            className="absolute top-2.5 right-2.5 z-20 p-1.5 rounded-md bg-white/90 hover:bg-white text-slate-600 hover:text-slate-900 border border-slate-200/90 shadow-2xs transition-colors"
-          >
-            {rightCollapsed ? (
-              <PanelRightOpen className="w-3.5 h-3.5" />
-            ) : (
-              <PanelRightClose className="w-3.5 h-3.5" />
-            )}
-          </button>
+              <button
+                onClick={() => setRightCollapsed(!rightCollapsed)}
+                title={
+                  rightCollapsed
+                    ? 'Expand Right Inspector'
+                    : 'Collapse Right Inspector'
+                }
+                className="absolute top-2.5 right-2.5 z-20 p-1.5 rounded-md bg-white/90 hover:bg-white text-slate-600 hover:text-slate-900 border border-slate-200/90 shadow-2xs transition-colors"
+              >
+                {rightCollapsed ? (
+                  <PanelRightOpen className="w-3.5 h-3.5" />
+                ) : (
+                  <PanelRightClose className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </>
+          )}
 
           {editorMode === '2d' ? <Canvas2DEditor /> : <Canvas3DSimulator />}
         </div>
@@ -223,6 +334,7 @@ export function App() {
       {/* Modals */}
       <ExportModal />
       <ProjectManagerModal />
+      <ShortcutsModal />
     </div>
   );
 }

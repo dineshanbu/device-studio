@@ -75,9 +75,30 @@ export type LeftSidebarTab =
   | 'backgrounds'
   | 'layers';
 
-export type ActiveModalType = 'none' | 'projects' | 'export' | 'architecture';
+export type ActiveModalType =
+  | 'none'
+  | 'projects'
+  | 'export'
+  | 'architecture'
+  | 'shortcuts';
 
-interface HistorySnapshot {
+export type ElementAlignmentType =
+  | 'left'
+  | 'center'
+  | 'right'
+  | 'top'
+  | 'middle'
+  | 'bottom';
+
+export type ElementDistributionAxis = 'horizontal' | 'vertical';
+
+export type ArrangeTargetScope = 'auto' | 'stage' | 'selection';
+
+export interface HistorySnapshot {
+  id: string;
+  frame: number;
+  timestamp: number;
+  label: string;
   devices: SceneDeviceObject[];
   drawings: SceneDrawingObject[];
   webcams: SceneWebcamOverlay[];
@@ -124,10 +145,14 @@ export interface StudioState {
   webcams: SceneWebcamOverlay[];
   selectedIds: string[];
   selectedDrawingId: string | null;
+  selectedDrawingIds: string[];
   selectedWebcamId: string | null;
+  selectedWebcamIds: string[];
   selectedClipId: string | null;
   selectedKeyframe: { trackId: string; keyframeId: string } | null;
   copiedDevices: SceneDeviceObject[];
+  copiedDrawing: SceneDrawingObject | null;
+  copiedWebcam: SceneWebcamOverlay | null;
   copiedKeyframe: Keyframe | null;
   copiedTransition: CopiedDeviceTransition | null;
   favoriteTransitionPresetIds: AnimationPresetId[];
@@ -184,12 +209,15 @@ export interface StudioState {
   panX: number;
   panY: number;
   snapToGrid: boolean;
+  gridSize: number;
   showGuides: boolean;
   showRulers: boolean;
+  isPreviewMode: boolean;
 
   // Undo/Redo history
   history: HistorySnapshot[];
   historyIndex: number;
+  syncPlayheadOnHistoryScrub: boolean;
 
   // Basic UI Actions
   setProjectName: (name: string) => void;
@@ -199,8 +227,13 @@ export interface StudioState {
   setTimelineCollapsed: (collapsed: boolean) => void;
   setZoomAndPan: (zoom: number, panX?: number, panY?: number) => void;
   setSnapToGrid: (snap: boolean) => void;
+  toggleSnapToGrid: () => void;
+  setGridSize: (size: number) => void;
+  snapSelectedToGrid: () => void;
   setShowGuides: (show: boolean) => void;
   setShowRulers: (show: boolean) => void;
+  setIsPreviewMode: (preview: boolean) => void;
+  togglePreviewMode: () => void;
   setCanvasAspectRatio: (
     ratio: AspectRatioPreset,
     customW?: number,
@@ -219,6 +252,11 @@ export interface StudioState {
   addDevice: (presetId: string) => void;
   selectDevice: (id: string | null, multi?: boolean) => void;
   selectAllDevices: () => void;
+  setMarqueeSelection: (selection: {
+    deviceIds: string[];
+    drawingIds?: string[];
+    webcamIds?: string[];
+  }) => void;
   updateDevice: (
     id: string,
     patch: Partial<SceneDeviceObject>,
@@ -230,13 +268,21 @@ export interface StudioState {
   deleteSelectedDevices: () => void;
   duplicateSelectedDevices: () => void;
   copySelectedDevices: () => void;
-  pasteDevices: () => void;
+  pasteDevices: (targetPos?: { x: number; y: number }) => void;
   reorderDeviceLayer: (
     id: string,
     direction: 'up' | 'down' | 'top' | 'bottom'
   ) => void;
   groupSelectedDevices: () => void;
   ungroupSelectedDevices: () => void;
+  alignSelectedElements: (
+    alignment: ElementAlignmentType,
+    scope?: ArrangeTargetScope
+  ) => void;
+  distributeSelectedElements: (
+    axis: ElementDistributionAxis,
+    scope?: ArrangeTargetScope
+  ) => void;
 
   // Theme Colour Studio Actions
   applyDeviceSwatch: (deviceId: string, swatchId: string) => void;
@@ -502,9 +548,11 @@ export interface StudioState {
 
   // Templates & Project Lifecycle
   applySceneTemplate: (templateId: string) => void;
-  pushHistory: () => void;
+  pushHistory: (label?: string) => void;
   undo: () => void;
   redo: () => void;
+  scrubToHistoryIndex: (targetIdx: number, syncPlayhead?: boolean) => void;
+  setSyncPlayheadOnHistoryScrub: (sync: boolean) => void;
   newProject: () => void;
   saveCurrentProject: () => Promise<ProjectDocument>;
   loadProjectDocument: (doc: ProjectDocument) => void;
@@ -905,9 +953,15 @@ function cloneSnapshot(
   clips: TimelineClip[],
   tracks: TimelineTrack[],
   background: SceneBackground,
-  studio3D: Studio3DSettings
+  studio3D: Studio3DSettings,
+  meta?: {
+    id?: string;
+    frame?: number;
+    timestamp?: number;
+    label?: string;
+  }
 ): HistorySnapshot {
-  return JSON.parse(
+  const cloned = JSON.parse(
     JSON.stringify({
       devices,
       drawings,
@@ -918,6 +972,182 @@ function cloneSnapshot(
       studio3D,
     })
   );
+  return {
+    id:
+      meta?.id ||
+      `hist-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    frame: Math.max(0, Math.round(meta?.frame ?? 0)),
+    timestamp: meta?.timestamp ?? Date.now(),
+    label: meta?.label || 'Scene Snapshot',
+    ...cloned,
+  };
+}
+
+function inferHistoryActionMeta(
+  prev: HistorySnapshot | undefined,
+  next: {
+    devices: SceneDeviceObject[];
+    drawings: SceneDrawingObject[];
+    webcams: SceneWebcamOverlay[];
+    clips: TimelineClip[];
+    tracks: TimelineTrack[];
+    background: SceneBackground;
+    studio3D: Studio3DSettings;
+  },
+  currentFrame: number,
+  explicitLabel?: string
+): { label: string; frame: number } {
+  if (explicitLabel) {
+    return { label: explicitLabel, frame: currentFrame };
+  }
+  if (!prev) {
+    return { label: 'Initial Scene Setup', frame: currentFrame };
+  }
+
+  if (next.devices.length > prev.devices.length) {
+    const added = next.devices[next.devices.length - 1];
+    return {
+      label: `Added ${added?.name || 'Device'}`,
+      frame: currentFrame,
+    };
+  }
+  if (next.devices.length < prev.devices.length) {
+    return { label: 'Deleted Device', frame: currentFrame };
+  }
+
+  if (next.drawings.length > prev.drawings.length) {
+    const added = next.drawings[next.drawings.length - 1];
+    return {
+      label: `Added ${added?.name || 'Drawing'}`,
+      frame: added?.startFrame ?? currentFrame,
+    };
+  }
+  if (next.drawings.length < prev.drawings.length) {
+    return { label: 'Deleted Drawing', frame: currentFrame };
+  }
+
+  if (next.webcams.length > (prev.webcams?.length ?? 0)) {
+    const added = next.webcams[next.webcams.length - 1];
+    return {
+      label: `Added ${added?.name || 'Webcam'}`,
+      frame: currentFrame,
+    };
+  }
+  if (next.webcams.length < (prev.webcams?.length ?? 0)) {
+    return { label: 'Deleted Webcam', frame: currentFrame };
+  }
+
+  if (next.clips.length > prev.clips.length) {
+    return { label: `Split / Added Clip`, frame: currentFrame };
+  }
+  if (next.clips.length < prev.clips.length) {
+    return { label: 'Deleted Video Clip', frame: currentFrame };
+  }
+
+  // Check keyframe additions, deletions, or frame moves
+  const prevKfCount = prev.tracks.reduce(
+    (acc, t) => acc + t.keyframes.length,
+    0
+  );
+  const nextKfCount = next.tracks.reduce(
+    (acc, t) => acc + t.keyframes.length,
+    0
+  );
+  if (nextKfCount > prevKfCount) {
+    return { label: `Added Keyframe`, frame: currentFrame };
+  }
+  if (nextKfCount < prevKfCount) {
+    return { label: `Deleted Keyframe`, frame: currentFrame };
+  }
+
+  for (const nextTrack of next.tracks) {
+    const prevTrack = prev.tracks.find((t) => t.id === nextTrack.id);
+    if (!prevTrack) continue;
+    for (const nk of nextTrack.keyframes) {
+      const pk = prevTrack.keyframes.find((k) => k.id === nk.id);
+      if (pk && pk.frame !== nk.frame) {
+        return {
+          label: `Moved Keyframe (${nextTrack.label})`,
+          frame: nk.frame,
+        };
+      }
+      if (pk && pk.easing !== nk.easing) {
+        return {
+          label: `Easing → ${nk.easing}`,
+          frame: nk.frame,
+        };
+      }
+    }
+  }
+
+  // Check clip trim or move
+  for (const nc of next.clips) {
+    const pc = prev.clips.find((c) => c.id === nc.id);
+    if (
+      pc &&
+      (pc.startFrame !== nc.startFrame ||
+        pc.durationFrames !== nc.durationFrames ||
+        pc.trimStartFrames !== nc.trimStartFrames)
+    ) {
+      return {
+        label: `Trimmed / Moved Clip`,
+        frame: nc.startFrame,
+      };
+    }
+  }
+
+  // Check drawing clip trim or move
+  for (const nd of next.drawings) {
+    const pd = prev.drawings.find((d) => d.id === nd.id);
+    if (
+      pd &&
+      (pd.startFrame !== nd.startFrame ||
+        pd.durationFrames !== nd.durationFrames)
+    ) {
+      return {
+        label: `Trimmed Drawing (${nd.name})`,
+        frame: nd.startFrame ?? currentFrame,
+      };
+    }
+    if (pd && (pd.x !== nd.x || pd.y !== nd.y || pd.rotation !== nd.rotation)) {
+      return {
+        label: `Transformed ${nd.name}`,
+        frame: currentFrame,
+      };
+    }
+  }
+
+  // Check device transform or style update
+  for (const nd of next.devices) {
+    const pd = prev.devices.find((d) => d.id === nd.id);
+    if (!pd) continue;
+    if (
+      pd.x !== nd.x ||
+      pd.y !== nd.y ||
+      pd.scaleX !== nd.scaleX ||
+      pd.scaleY !== nd.scaleY ||
+      pd.rotation !== nd.rotation ||
+      pd.pos3DX !== nd.pos3DX ||
+      pd.pos3DY !== nd.pos3DY ||
+      pd.pos3DZ !== nd.pos3DZ
+    ) {
+      return {
+        label: `Transformed ${nd.name}`,
+        frame: currentFrame,
+      };
+    }
+    if (pd.activeTransitionPresetId !== nd.activeTransitionPresetId) {
+      return {
+        label: `Transition on ${nd.name}`,
+        frame: currentFrame,
+      };
+    }
+  }
+
+  return {
+    label: `Edited Scene at F${String(currentFrame).padStart(3, '0')}`,
+    frame: currentFrame,
+  };
 }
 
 export const useStudioStore = create<StudioState>((set, get) => ({
@@ -936,11 +1166,15 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   webcams: [],
   selectedIds: [initialScene.devices[1].id],
   selectedDrawingId: null,
+  selectedDrawingIds: [],
   selectedWebcamId: null,
+  selectedWebcamIds: [],
   selectedClipId: null,
   selectedKeyframe: null,
   selectedBackgroundLayerId: DEFAULT_BACKGROUND_LAYERS[0].id,
   copiedDevices: [],
+  copiedDrawing: null,
+  copiedWebcam: null,
   copiedKeyframe: null,
   copiedTransition: null,
   favoriteTransitionPresetIds: [],
@@ -994,8 +1228,10 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   panX: 0,
   panY: 0,
   snapToGrid: true,
+  gridSize: 40,
   showGuides: true,
   showRulers: true,
+  isPreviewMode: false,
 
   history: [
     cloneSnapshot(
@@ -1005,10 +1241,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       initialScene.clips,
       initialScene.tracks,
       initialBackground,
-      initialStudio3D
+      initialStudio3D,
+      {
+        id: 'hist-initial-0',
+        frame: 0,
+        timestamp: Date.now() - 1000,
+        label: 'Initial Scene Setup',
+      }
     ),
   ],
   historyIndex: 0,
+  syncPlayheadOnHistoryScrub: false,
 
   setProjectName: (name) => set({ projectName: name }),
   setEditorMode: (mode) => set({ editorMode: mode }),
@@ -1021,9 +1264,117 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       panX: panX !== undefined ? panX : state.panX,
       panY: panY !== undefined ? panY : state.panY,
     })),
-  setSnapToGrid: (snap) => set({ snapToGrid: snap }),
+  setSnapToGrid: (snap) =>
+    set((state) => ({
+      snapToGrid: snap,
+      lastTimelineNotice: snap
+        ? `Snap to Grid enabled (${state.gridSize}px)`
+        : 'Snap to Grid disabled',
+    })),
+  toggleSnapToGrid: () =>
+    set((state) => {
+      const next = !state.snapToGrid;
+      return {
+        snapToGrid: next,
+        lastTimelineNotice: next
+          ? `Snap to Grid enabled (${state.gridSize}px)`
+          : 'Snap to Grid disabled',
+      };
+    }),
+  setGridSize: (size) => {
+    const clamped = Math.max(8, Math.min(240, Math.round(size || 40)));
+    set({
+      gridSize: clamped,
+      lastTimelineNotice: `Grid size set to ${clamped}px`,
+    });
+  },
+  snapSelectedToGrid: () => {
+    const state = get();
+    const step = Math.max(8, state.gridSize || 40);
+    const snap = (v: number) => Math.round(v / step) * step;
+    const snapAngle = (deg: number) => Math.round(deg / 15) * 15;
+    // 3D depth step derived from gridSize (e.g. 40px -> 0.25 world units)
+    const step3D = Math.max(0.1, Number(((step / 160) * 1).toFixed(2)));
+    const snap3D = (v: number) =>
+      Number((Math.round((v || 0) / step3D) * step3D).toFixed(2));
+
+    if (state.selectedWebcamId) {
+      const wc = state.webcams.find((w) => w.id === state.selectedWebcamId);
+      if (wc) {
+        get().updateWebcam(wc.id, {
+          x: snap(wc.x),
+          y: snap(wc.y),
+          width: Math.max(80, snap(wc.width)),
+          height: Math.max(80, snap(wc.height)),
+          rotation: snapAngle(wc.rotation),
+        });
+        set({
+          lastTimelineNotice: `Snapped "${wc.name}" to ${step}px grid`,
+        });
+      }
+      return;
+    }
+
+    if (state.selectedDrawingId) {
+      const dr = state.drawings.find((d) => d.id === state.selectedDrawingId);
+      if (dr) {
+        get().updateDrawing(dr.id, {
+          x: snap(dr.x),
+          y: snap(dr.y),
+          rotation: snapAngle(dr.rotation),
+        });
+        set({
+          lastTimelineNotice: `Snapped "${dr.name}" to ${step}px grid`,
+        });
+      }
+      return;
+    }
+
+    if (state.selectedIds.length > 0) {
+      state.selectedIds.forEach((id) => {
+        const dev = state.devices.find((d) => d.id === id);
+        if (!dev) return;
+        get().updateDevice(
+          id,
+          {
+            x: snap(dev.x),
+            y: snap(dev.y),
+            rotation: snapAngle(dev.rotation),
+            pos3DX: snap3D(dev.pos3DX),
+            pos3DY: snap3D(dev.pos3DY),
+            pos3DZ: snap3D(dev.pos3DZ),
+            rotation3DX: snapAngle(dev.rotation3DX),
+            rotation3DY: snapAngle(dev.rotation3DY),
+            rotation3DZ: snapAngle(dev.rotation3DZ),
+          },
+          false
+        );
+      });
+      get().pushHistory();
+      set({
+        lastTimelineNotice: `Aligned ${state.selectedIds.length} device${state.selectedIds.length > 1 ? 's' : ''} to ${step}px grid`,
+      });
+    }
+  },
   setShowGuides: (show) => set({ showGuides: show }),
   setShowRulers: (show) => set({ showRulers: show }),
+  setIsPreviewMode: (preview) =>
+    set({
+      isPreviewMode: preview,
+      lastTimelineNotice: preview
+        ? 'Export Preview Mode active — all editor overlays, grids & UI handles hidden'
+        : 'Exited Export Preview Mode — editor overlays restored',
+    }),
+  togglePreviewMode: () =>
+    set((state) => {
+      const next = !state.isPreviewMode;
+      return {
+        isPreviewMode: next,
+        lastTimelineNotice: next
+          ? 'Export Preview Mode active — all editor overlays, grids & UI handles hidden'
+          : 'Exited Export Preview Mode — editor overlays restored',
+      };
+    }),
   setLoopPlayback: (loop) => set({ loopPlayback: loop }),
   setAutoKeyframe: (auto) => set({ autoKeyframe: auto }),
   setShowMotionTrail: (show) =>
@@ -1085,7 +1436,7 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       currentFrame: Math.min(state.currentFrame, durationInFrames - 1),
     })),
 
-  pushHistory: () => {
+  pushHistory: (label) => {
     const {
       devices,
       drawings,
@@ -1094,9 +1445,17 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       tracks,
       background,
       studio3D,
+      currentFrame,
       history,
       historyIndex,
     } = get();
+    const prevSnap = history[historyIndex];
+    const inferred = inferHistoryActionMeta(
+      prevSnap,
+      { devices, drawings, webcams, clips, tracks, background, studio3D },
+      currentFrame,
+      label
+    );
     const snap = cloneSnapshot(
       devices,
       drawings,
@@ -1104,7 +1463,12 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       clips,
       tracks,
       background,
-      studio3D
+      studio3D,
+      {
+        frame: inferred.frame,
+        timestamp: Date.now(),
+        label: inferred.label,
+      }
     );
     const trimmed = history.slice(0, historyIndex + 1);
     trimmed.push(snap);
@@ -1116,19 +1480,32 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   },
 
   undo: () => {
-    const { history, historyIndex } = get();
+    const {
+      history,
+      historyIndex,
+      syncPlayheadOnHistoryScrub,
+      durationInFrames,
+    } = get();
     if (historyIndex <= 0) return;
     const targetIdx = historyIndex - 1;
+    const targetSnap = history[targetIdx];
+    const undoneSnap = history[historyIndex];
     const snap = cloneSnapshot(
-      history[targetIdx].devices,
-      history[targetIdx].drawings,
-      history[targetIdx].webcams || [],
-      history[targetIdx].clips,
-      history[targetIdx].tracks,
-      history[targetIdx].background,
-      history[targetIdx].studio3D
+      targetSnap.devices,
+      targetSnap.drawings,
+      targetSnap.webcams || [],
+      targetSnap.clips,
+      targetSnap.tracks,
+      targetSnap.background,
+      targetSnap.studio3D,
+      {
+        id: targetSnap.id,
+        frame: targetSnap.frame,
+        timestamp: targetSnap.timestamp,
+        label: targetSnap.label,
+      }
     );
-    set({
+    set((state) => ({
       devices: snap.devices,
       drawings: snap.drawings,
       webcams: snap.webcams || [],
@@ -1137,23 +1514,39 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       background: snap.background,
       studio3D: snap.studio3D,
       historyIndex: targetIdx,
-    });
+      currentFrame: syncPlayheadOnHistoryScrub
+        ? Math.max(0, Math.min(durationInFrames - 1, snap.frame))
+        : state.currentFrame,
+      lastTimelineNotice: `Undo: ${undoneSnap?.label || 'Action'} (Step ${targetIdx + 1}/${history.length} · F${String(snap.frame).padStart(3, '0')})`,
+    }));
   },
 
   redo: () => {
-    const { history, historyIndex } = get();
+    const {
+      history,
+      historyIndex,
+      syncPlayheadOnHistoryScrub,
+      durationInFrames,
+    } = get();
     if (historyIndex >= history.length - 1) return;
     const targetIdx = historyIndex + 1;
+    const targetSnap = history[targetIdx];
     const snap = cloneSnapshot(
-      history[targetIdx].devices,
-      history[targetIdx].drawings,
-      history[targetIdx].webcams || [],
-      history[targetIdx].clips,
-      history[targetIdx].tracks,
-      history[targetIdx].background,
-      history[targetIdx].studio3D
+      targetSnap.devices,
+      targetSnap.drawings,
+      targetSnap.webcams || [],
+      targetSnap.clips,
+      targetSnap.tracks,
+      targetSnap.background,
+      targetSnap.studio3D,
+      {
+        id: targetSnap.id,
+        frame: targetSnap.frame,
+        timestamp: targetSnap.timestamp,
+        label: targetSnap.label,
+      }
     );
-    set({
+    set((state) => ({
       devices: snap.devices,
       drawings: snap.drawings,
       webcams: snap.webcams || [],
@@ -1162,8 +1555,74 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       background: snap.background,
       studio3D: snap.studio3D,
       historyIndex: targetIdx,
-    });
+      currentFrame: syncPlayheadOnHistoryScrub
+        ? Math.max(0, Math.min(durationInFrames - 1, snap.frame))
+        : state.currentFrame,
+      lastTimelineNotice: `Redo: ${snap.label} (Step ${targetIdx + 1}/${history.length} · F${String(snap.frame).padStart(3, '0')})`,
+    }));
   },
+
+  scrubToHistoryIndex: (targetIdx, syncPlayhead) => {
+    const {
+      history,
+      historyIndex,
+      syncPlayheadOnHistoryScrub,
+      durationInFrames,
+    } = get();
+    const clampedIdx = Math.max(0, Math.min(history.length - 1, targetIdx));
+    const targetSnap = history[clampedIdx];
+    if (!targetSnap) return;
+    const shouldSync = syncPlayhead ?? syncPlayheadOnHistoryScrub;
+    if (clampedIdx === historyIndex) {
+      if (shouldSync) {
+        set({
+          currentFrame: Math.max(
+            0,
+            Math.min(durationInFrames - 1, targetSnap.frame)
+          ),
+          lastTimelineNotice: `Jumped playhead to History Step ${clampedIdx + 1}/${history.length}: ${targetSnap.label} (F${String(targetSnap.frame).padStart(3, '0')})`,
+        });
+      }
+      return;
+    }
+    const snap = cloneSnapshot(
+      targetSnap.devices,
+      targetSnap.drawings,
+      targetSnap.webcams || [],
+      targetSnap.clips,
+      targetSnap.tracks,
+      targetSnap.background,
+      targetSnap.studio3D,
+      {
+        id: targetSnap.id,
+        frame: targetSnap.frame,
+        timestamp: targetSnap.timestamp,
+        label: targetSnap.label,
+      }
+    );
+    set((state) => ({
+      devices: snap.devices,
+      drawings: snap.drawings,
+      webcams: snap.webcams || [],
+      clips: snap.clips,
+      tracks: snap.tracks,
+      background: snap.background,
+      studio3D: snap.studio3D,
+      historyIndex: clampedIdx,
+      currentFrame: shouldSync
+        ? Math.max(0, Math.min(durationInFrames - 1, snap.frame))
+        : state.currentFrame,
+      lastTimelineNotice: `History Scrub → Step ${clampedIdx + 1}/${history.length}: ${snap.label} (F${String(snap.frame).padStart(3, '0')})`,
+    }));
+  },
+
+  setSyncPlayheadOnHistoryScrub: (sync) =>
+    set({
+      syncPlayheadOnHistoryScrub: sync,
+      lastTimelineNotice: sync
+        ? 'History Scrub Playhead Sync enabled'
+        : 'History Scrub Playhead Sync disabled',
+    }),
 
   addDevice: (presetId) => {
     const preset = getDevicePresetById(presetId);
@@ -1252,7 +1711,11 @@ export const useStudioStore = create<StudioState>((set, get) => ({
 
   selectDevice: (id, multi = false) => {
     if (!id) {
-      set({ selectedIds: [] });
+      set({
+        selectedIds: [],
+        selectedDrawingIds: [],
+        selectedWebcamIds: [],
+      });
       return;
     }
     set((state) => {
@@ -1268,7 +1731,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
         return {
           selectedIds: groupMembers,
           selectedDrawingId: null,
+          selectedDrawingIds: [],
           selectedWebcamId: null,
+          selectedWebcamIds: [],
           selectedClipId: null,
         };
       }
@@ -1285,18 +1750,70 @@ export const useStudioStore = create<StudioState>((set, get) => ({
           new Set([...state.selectedIds, ...groupMembers])
         ),
         selectedDrawingId: null,
+        selectedDrawingIds: [],
         selectedWebcamId: null,
+        selectedWebcamIds: [],
         selectedClipId: null,
       };
     });
   },
 
   selectAllDevices: () =>
-    set((state) => ({
-      selectedIds: state.devices
+    set((state) => {
+      const allDevIds = state.devices
         .filter((d) => !d.locked && d.visible)
-        .map((d) => d.id),
-    })),
+        .map((d) => d.id);
+      const allDrIds = state.drawings
+        .filter((d) => !d.locked && d.visible)
+        .map((d) => d.id);
+      const allWcIds = state.webcams
+        .filter((w) => !w.locked && w.visible)
+        .map((w) => w.id);
+      return {
+        selectedIds: allDevIds,
+        selectedDrawingIds: allDrIds,
+        selectedDrawingId: allDevIds.length === 0 ? (allDrIds[0] ?? null) : null,
+        selectedWebcamIds: allWcIds,
+        selectedWebcamId:
+          allDevIds.length === 0 && allDrIds.length === 0
+            ? (allWcIds[0] ?? null)
+            : null,
+      };
+    }),
+
+  setMarqueeSelection: ({
+    deviceIds,
+    drawingIds = [],
+    webcamIds = [],
+  }) =>
+    set((state) => {
+      const expandedDeviceIds = new Set<string>();
+      for (const devId of deviceIds) {
+        expandedDeviceIds.add(devId);
+        const target = state.devices.find((d) => d.id === devId);
+        if (target?.groupId) {
+          state.devices
+            .filter((d) => d.groupId === target.groupId && !d.locked && d.visible)
+            .forEach((d) => expandedDeviceIds.add(d.id));
+        }
+      }
+      const finalDeviceIds = Array.from(expandedDeviceIds);
+      const finalDrawingIds = Array.from(new Set(drawingIds));
+      const finalWebcamIds = Array.from(new Set(webcamIds));
+
+      return {
+        selectedIds: finalDeviceIds,
+        selectedDrawingIds: finalDrawingIds,
+        selectedDrawingId:
+          finalDeviceIds.length === 0 ? (finalDrawingIds[0] ?? null) : null,
+        selectedWebcamIds: finalWebcamIds,
+        selectedWebcamId:
+          finalDeviceIds.length === 0 && finalDrawingIds.length === 0
+            ? (finalWebcamIds[0] ?? null)
+            : null,
+        selectedClipId: null,
+      };
+    }),
 
   updateDevice: (id, patch, recordHistory = true) => {
     set((state) => {
@@ -1623,20 +2140,50 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   },
 
   deleteSelectedDevices: () => {
-    const { selectedIds, selectedDrawingId, selectedWebcamId } = get();
-    if (selectedWebcamId) {
-      get().deleteWebcam(selectedWebcamId);
+    const {
+      selectedIds,
+      selectedDrawingId,
+      selectedDrawingIds,
+      selectedWebcamId,
+      selectedWebcamIds,
+    } = get();
+
+    const drToDelete = Array.from(
+      new Set([
+        ...selectedDrawingIds,
+        ...(selectedDrawingId ? [selectedDrawingId] : []),
+      ])
+    );
+    const wcToDelete = Array.from(
+      new Set([
+        ...selectedWebcamIds,
+        ...(selectedWebcamId ? [selectedWebcamId] : []),
+      ])
+    );
+
+    if (
+      selectedIds.length === 0 &&
+      drToDelete.length === 0 &&
+      wcToDelete.length === 0
+    ) {
       return;
     }
-    if (selectedDrawingId) {
-      get().deleteDrawing(selectedDrawingId);
-      return;
-    }
-    if (selectedIds.length === 0) return;
+
     set((state) => ({
       devices: state.devices.filter((d) => !selectedIds.includes(d.id)),
-      tracks: state.tracks.filter((t) => !selectedIds.includes(t.targetId)),
+      drawings: state.drawings.filter((dr) => !drToDelete.includes(dr.id)),
+      webcams: state.webcams.filter((wc) => !wcToDelete.includes(wc.id)),
+      tracks: state.tracks.filter(
+        (t) =>
+          !selectedIds.includes(t.targetId) &&
+          !drToDelete.includes(t.targetId) &&
+          !wcToDelete.includes(t.targetId)
+      ),
       selectedIds: [],
+      selectedDrawingId: null,
+      selectedDrawingIds: [],
+      selectedWebcamId: null,
+      selectedWebcamIds: [],
     }));
     get().pushHistory();
   },
@@ -1710,29 +2257,188 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   },
 
   copySelectedDevices: () => {
-    const { devices, selectedIds } = get();
+    const {
+      devices,
+      drawings,
+      webcams,
+      selectedIds,
+      selectedDrawingId,
+      selectedWebcamId,
+    } = get();
+    if (selectedWebcamId) {
+      const wc = webcams.find((w) => w.id === selectedWebcamId);
+      if (wc) {
+        set({
+          copiedWebcam: JSON.parse(JSON.stringify(wc)),
+          copiedDrawing: null,
+          copiedDevices: [],
+          lastTimelineNotice: `Copied webcam "${wc.name}"`,
+        });
+      }
+      return;
+    }
+    if (selectedDrawingId) {
+      const dr = drawings.find((d) => d.id === selectedDrawingId);
+      if (dr) {
+        set({
+          copiedDrawing: JSON.parse(JSON.stringify(dr)),
+          copiedWebcam: null,
+          copiedDevices: [],
+          lastTimelineNotice: `Copied drawing "${dr.name}"`,
+        });
+      }
+      return;
+    }
     const copies = devices
       .filter((d) => selectedIds.includes(d.id))
       .map((d) => JSON.parse(JSON.stringify(d)));
-    set({ copiedDevices: copies });
+    if (copies.length > 0) {
+      set({
+        copiedDevices: copies,
+        copiedDrawing: null,
+        copiedWebcam: null,
+        lastTimelineNotice: `Copied ${copies.length} device${copies.length > 1 ? 's' : ''}`,
+      });
+    }
   },
 
-  pasteDevices: () => {
-    const { copiedDevices, devices } = get();
+  pasteDevices: (targetPos) => {
+    const { copiedDevices, copiedDrawing, copiedWebcam, devices, drawings, webcams } =
+      get();
+
+    if (copiedWebcam) {
+      const id = `webcam-paste-${Date.now().toString(36).slice(-4)}`;
+      const copy: SceneWebcamOverlay = {
+        ...JSON.parse(JSON.stringify(copiedWebcam)),
+        id,
+        name: `${copiedWebcam.name} Pasted`,
+        x: targetPos ? Math.round(targetPos.x) : Math.max(160, copiedWebcam.x + 48),
+        y: targetPos ? Math.round(targetPos.y) : Math.max(160, copiedWebcam.y + 48),
+        zIndex: webcams.length + 22,
+      };
+      const newTrack: TimelineTrack = {
+        id: `track-${id}`,
+        targetId: id,
+        label: copy.name,
+        type: 'webcam',
+        visible: true,
+        locked: false,
+        keyframes: [
+          {
+            id: `kf-${id}-0`,
+            frame: 0,
+            easing: 'ease-in-out',
+            properties: {
+              x: copy.x,
+              y: copy.y,
+              width: copy.width,
+              height: copy.height,
+              scaleX: copy.scaleX,
+              scaleY: copy.scaleY,
+              rotation: copy.rotation,
+              opacity: copy.opacity,
+              cornerRadius: copy.cornerRadius,
+              strokeWidth: copy.borderWidth,
+              strokeColor: copy.borderColor,
+              borderOpacity: copy.borderOpacity,
+              glowBlur: copy.glowRadius,
+              glowIntensity: copy.glowIntensity,
+              glowColor: copy.glowColor,
+              cropZoom: copy.zoom,
+              panX: copy.panX,
+              panY: copy.panY,
+              borderProgress: copy.borderAnimationProgress,
+              curveIntensity: copy.curveIntensity,
+            },
+          },
+        ],
+      };
+      set((state) => ({
+        webcams: [...state.webcams, copy],
+        tracks: [...state.tracks, newTrack],
+        selectedWebcamId: id,
+        selectedDrawingId: null,
+        selectedIds: [],
+        lastTimelineNotice: `Pasted "${copy.name}"`,
+      }));
+      get().pushHistory();
+      return;
+    }
+
+    if (copiedDrawing) {
+      const id = `draw-paste-${Date.now().toString(36).slice(-4)}`;
+      const copy: SceneDrawingObject = {
+        ...JSON.parse(JSON.stringify(copiedDrawing)),
+        id,
+        name: `${copiedDrawing.name} Pasted`,
+        x: targetPos ? Math.round(targetPos.x) : copiedDrawing.x + 40,
+        y: targetPos ? Math.round(targetPos.y) : copiedDrawing.y + 40,
+        zIndex: drawings.length + 10,
+      };
+      const newTrack: TimelineTrack = {
+        id: `track-${id}`,
+        targetId: id,
+        label: copy.name,
+        type: 'drawing',
+        visible: true,
+        locked: false,
+        keyframes: [
+          {
+            id: `kf-${id}-0`,
+            frame: 0,
+            easing: 'ease-in-out',
+            properties: {
+              x: copy.x,
+              y: copy.y,
+              scaleX: copy.scaleX,
+              scaleY: copy.scaleY,
+              rotation: copy.rotation,
+              opacity: copy.opacity,
+              glowBlur: copy.glowRadius,
+              glowIntensity: copy.glowIntensity,
+              glowColor: copy.glowColor,
+            },
+          },
+        ],
+      };
+      set((state) => ({
+        drawings: [...state.drawings, copy],
+        tracks: [...state.tracks, newTrack],
+        selectedDrawingId: id,
+        selectedWebcamId: null,
+        selectedIds: [],
+        lastTimelineNotice: `Pasted "${copy.name}"`,
+      }));
+      get().pushHistory();
+      return;
+    }
+
     if (copiedDevices.length === 0) return;
     const createdIds: string[] = [];
     const newDevices: SceneDeviceObject[] = [];
     const newTracks: TimelineTrack[] = [];
 
+    // Calculate centroid of copied devices if pasting at a specific targetPos
+    const avgX =
+      copiedDevices.reduce((sum, d) => sum + d.x, 0) / copiedDevices.length;
+    const avgY =
+      copiedDevices.reduce((sum, d) => sum + d.y, 0) / copiedDevices.length;
+
     copiedDevices.forEach((orig, idx) => {
       const id = `dev-paste-${Date.now().toString(36)}-${idx}`;
       createdIds.push(id);
+      const nextX = targetPos
+        ? Math.round(targetPos.x + (orig.x - avgX))
+        : orig.x + 56;
+      const nextY = targetPos
+        ? Math.round(targetPos.y + (orig.y - avgY))
+        : orig.y + 56;
       const copy: SceneDeviceObject = {
         ...JSON.parse(JSON.stringify(orig)),
         id,
         name: `${orig.name} Pasted`,
-        x: orig.x + 56,
-        y: orig.y + 56,
+        x: nextX,
+        y: nextY,
         pos3DX: orig.pos3DX + 1.5,
         zIndex: devices.length + idx + 1,
       };
@@ -1772,6 +2478,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       devices: [...state.devices, ...newDevices],
       tracks: [...state.tracks, ...newTracks],
       selectedIds: createdIds,
+      selectedDrawingId: null,
+      selectedWebcamId: null,
+      lastTimelineNotice: `Pasted ${newDevices.length} device${newDevices.length > 1 ? 's' : ''}`,
     }));
     get().pushHistory();
   },
@@ -1820,6 +2529,189 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       ),
     }));
     get().pushHistory();
+  },
+
+  alignSelectedElements: (alignment, scope = 'auto') => {
+    const state = get();
+    const pad = 60;
+
+    if (state.selectedWebcamId) {
+      const wc = state.webcams.find((w) => w.id === state.selectedWebcamId);
+      if (!wc || wc.locked) return;
+      const halfW = (wc.width * wc.scaleX) / 2;
+      const halfH = (wc.height * wc.scaleY) / 2;
+      const patch: Partial<SceneWebcamOverlay> = {};
+      if (alignment === 'left') patch.x = Math.round(halfW + pad);
+      else if (alignment === 'center') patch.x = Math.round(state.canvasWidth / 2);
+      else if (alignment === 'right')
+        patch.x = Math.round(state.canvasWidth - halfW - pad);
+      else if (alignment === 'top') patch.y = Math.round(halfH + pad);
+      else if (alignment === 'middle') patch.y = Math.round(state.canvasHeight / 2);
+      else if (alignment === 'bottom')
+        patch.y = Math.round(state.canvasHeight - halfH - pad);
+
+      get().updateWebcam(wc.id, patch);
+      set({
+        lastTimelineNotice: `Aligned "${wc.name}" (${alignment})`,
+      });
+      return;
+    }
+
+    if (state.selectedDrawingId) {
+      const dr = state.drawings.find((d) => d.id === state.selectedDrawingId);
+      if (!dr || dr.locked) return;
+      const halfW = (dr.width * dr.scaleX) / 2;
+      const halfH = (dr.height * dr.scaleY) / 2;
+      const patch: Partial<SceneDrawingObject> = {};
+      if (alignment === 'left') patch.x = Math.round(halfW + pad);
+      else if (alignment === 'center') patch.x = Math.round(state.canvasWidth / 2);
+      else if (alignment === 'right')
+        patch.x = Math.round(state.canvasWidth - halfW - pad);
+      else if (alignment === 'top') patch.y = Math.round(halfH + pad);
+      else if (alignment === 'middle') patch.y = Math.round(state.canvasHeight / 2);
+      else if (alignment === 'bottom')
+        patch.y = Math.round(state.canvasHeight - halfH - pad);
+
+      get().updateDrawing(dr.id, patch);
+      set({
+        lastTimelineNotice: `Aligned "${dr.name}" (${alignment})`,
+      });
+      return;
+    }
+
+    const targetDevices =
+      state.selectedIds.length > 0
+        ? state.devices.filter(
+            (d) => state.selectedIds.includes(d.id) && !d.locked
+          )
+        : state.devices.filter((d) => d.visible && !d.locked);
+
+    if (targetDevices.length === 0) return;
+
+    const useSelectionBounds =
+      scope === 'selection' ||
+      (scope === 'auto' && state.selectedIds.length >= 2);
+
+    if (useSelectionBounds && targetDevices.length >= 2) {
+      const minLeft = Math.min(
+        ...targetDevices.map((d) => d.x - (d.width * d.scaleX) / 2)
+      );
+      const maxRight = Math.max(
+        ...targetDevices.map((d) => d.x + (d.width * d.scaleX) / 2)
+      );
+      const minTop = Math.min(
+        ...targetDevices.map((d) => d.y - (d.height * d.scaleY) / 2)
+      );
+      const maxBottom = Math.max(
+        ...targetDevices.map((d) => d.y + (d.height * d.scaleY) / 2)
+      );
+      const centerX = (minLeft + maxRight) / 2;
+      const centerY = (minTop + maxBottom) / 2;
+
+      targetDevices.forEach((dev) => {
+        const halfW = (dev.width * dev.scaleX) / 2;
+        const halfH = (dev.height * dev.scaleY) / 2;
+        const patch: Partial<SceneDeviceObject> = {};
+        if (alignment === 'left') patch.x = Math.round(minLeft + halfW);
+        else if (alignment === 'center') patch.x = Math.round(centerX);
+        else if (alignment === 'right') patch.x = Math.round(maxRight - halfW);
+        else if (alignment === 'top') patch.y = Math.round(minTop + halfH);
+        else if (alignment === 'middle') patch.y = Math.round(centerY);
+        else if (alignment === 'bottom') patch.y = Math.round(maxBottom - halfH);
+
+        get().updateDevice(dev.id, patch, false);
+      });
+    } else {
+      targetDevices.forEach((dev) => {
+        const halfW = (dev.width * dev.scaleX) / 2;
+        const halfH = (dev.height * dev.scaleY) / 2;
+        const patch: Partial<SceneDeviceObject> = {};
+        if (alignment === 'left') patch.x = Math.round(halfW + pad);
+        else if (alignment === 'center')
+          patch.x = Math.round(state.canvasWidth / 2);
+        else if (alignment === 'right')
+          patch.x = Math.round(state.canvasWidth - halfW - pad);
+        else if (alignment === 'top') patch.y = Math.round(halfH + pad);
+        else if (alignment === 'middle')
+          patch.y = Math.round(state.canvasHeight / 2);
+        else if (alignment === 'bottom')
+          patch.y = Math.round(state.canvasHeight - halfH - pad);
+
+        get().updateDevice(dev.id, patch, false);
+      });
+    }
+
+    get().pushHistory();
+    set({
+      lastTimelineNotice: `Aligned ${targetDevices.length} element${targetDevices.length > 1 ? 's' : ''} (${alignment})`,
+    });
+  },
+
+  distributeSelectedElements: (axis, scope = 'auto') => {
+    const state = get();
+    const targetDevices =
+      state.selectedIds.length >= 2
+        ? state.devices.filter(
+            (d) => state.selectedIds.includes(d.id) && !d.locked
+          )
+        : state.devices.filter((d) => d.visible && !d.locked);
+
+    if (targetDevices.length === 0) return;
+
+    if (targetDevices.length === 1) {
+      const only = targetDevices[0];
+      get().updateDevice(
+        only.id,
+        axis === 'horizontal'
+          ? { x: Math.round(state.canvasWidth / 2) }
+          : { y: Math.round(state.canvasHeight / 2) }
+      );
+      set({
+        lastTimelineNotice: `Centered "${only.name}" ${axis}ly on stage`,
+      });
+      return;
+    }
+
+    const sorted = [...targetDevices].sort((a, b) =>
+      axis === 'horizontal' ? a.x - b.x : a.y - b.y
+    );
+
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const span = axis === 'horizontal' ? last.x - first.x : last.y - first.y;
+
+    const useSelectionSpan =
+      (scope === 'selection' || (scope === 'auto' && sorted.length >= 3)) &&
+      Math.abs(span) >= 80;
+
+    if (useSelectionSpan) {
+      const startCoord = axis === 'horizontal' ? first.x : first.y;
+      const step = span / (sorted.length - 1);
+      sorted.forEach((dev, idx) => {
+        const val = Math.round(startCoord + step * idx);
+        get().updateDevice(
+          dev.id,
+          axis === 'horizontal' ? { x: val } : { y: val },
+          false
+        );
+      });
+    } else {
+      const totalSpan =
+        axis === 'horizontal' ? state.canvasWidth : state.canvasHeight;
+      sorted.forEach((dev, idx) => {
+        const val = Math.round((totalSpan / (sorted.length + 1)) * (idx + 1));
+        get().updateDevice(
+          dev.id,
+          axis === 'horizontal' ? { x: val } : { y: val },
+          false
+        );
+      });
+    }
+
+    get().pushHistory();
+    set({
+      lastTimelineNotice: `Distributed ${sorted.length} elements ${axis}ly`,
+    });
   },
 
   // Drawing Tool & Animated Path Actions
@@ -1874,7 +2766,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       drawings: [...s.drawings, normalizedDrawing],
       tracks: [...s.tracks, newTrack],
       selectedDrawingId: normalizedDrawing.id,
+      selectedDrawingIds: [normalizedDrawing.id],
       selectedWebcamId: null,
+      selectedWebcamIds: [],
       selectedIds: [],
       selectedClipId: null,
     }));
@@ -1884,7 +2778,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   selectDrawing: (id) =>
     set({
       selectedDrawingId: id,
+      selectedDrawingIds: id ? [id] : [],
       selectedWebcamId: null,
+      selectedWebcamIds: [],
       selectedIds: [],
       selectedClipId: null,
     }),
@@ -2323,7 +3219,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
       webcams: [...s.webcams, newWebcam],
       tracks: [...s.tracks, newTrack],
       selectedWebcamId: id,
+      selectedWebcamIds: [id],
       selectedDrawingId: null,
+      selectedDrawingIds: [],
       selectedIds: [],
       selectedClipId: null,
       lastTimelineNotice: `Added "${newWebcam.name}" onto Canvas & Timeline`,
@@ -2334,7 +3232,9 @@ export const useStudioStore = create<StudioState>((set, get) => ({
   selectWebcam: (id) =>
     set({
       selectedWebcamId: id,
+      selectedWebcamIds: id ? [id] : [],
       selectedDrawingId: null,
+      selectedDrawingIds: [],
       selectedIds: [],
       selectedClipId: null,
     }),

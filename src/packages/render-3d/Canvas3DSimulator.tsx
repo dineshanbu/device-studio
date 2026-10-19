@@ -5,6 +5,7 @@ import {
   Camera,
   ChevronDown,
   ChevronUp,
+  Grid3X3,
   Layers,
   RotateCcw,
   Sun,
@@ -22,6 +23,8 @@ import type {
   DevicePreset,
   SceneDeviceObject,
 } from '../shared/types.ts';
+import { ViewportContextMenu } from '../editor/ViewportContextMenu.tsx';
+import { ViewportRulers } from '../editor/ViewportRulers.tsx';
 
 // Pre-allocated math helpers at module scope (zero GC in render loop)
 const _targetCamPos = new THREE.Vector3();
@@ -354,16 +357,38 @@ function getCameraTargetForPreset(
 export const Canvas3DSimulator: React.FC = () => {
   const canvasMountRef = useRef<HTMLDivElement | null>(null);
   const [dockCollapsed, setDockCollapsed] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{
+    clientX: number;
+    clientY: number;
+  } | null>(null);
 
   const storeState = useStudioStore();
   const stateRef = useRef(storeState);
   stateRef.current = storeState;
 
-  // Orbit drag state stored in ref so pointer drags smoothly rotate camera
-  const orbitAnglesRef = useRef<{ yaw: number; pitch: number; isDragging: boolean; lastX: number; lastY: number }>({
+  // Orbit & 3D device drag state stored in ref
+  const orbitAnglesRef = useRef<{
+    yaw: number;
+    pitch: number;
+    isDragging: boolean;
+    dragMode: 'orbit' | 'device';
+    dragDeviceId: string | null;
+    startDevX: number;
+    startDevY: number;
+    startClientX: number;
+    startClientY: number;
+    lastX: number;
+    lastY: number;
+  }>({
     yaw: 0,
     pitch: 0,
     isDragging: false,
+    dragMode: 'orbit',
+    dragDeviceId: null,
+    startDevX: 0,
+    startDevY: 0,
+    startClientX: 0,
+    startClientY: 0,
     lastX: 0,
     lastY: 0,
   });
@@ -458,10 +483,11 @@ export const Canvas3DSimulator: React.FC = () => {
     rimLight.position.set(-6, 4, -5);
     scene.add(rimLight);
 
-    // Subtle Studio Stage Floor Grid
-    const gridHelper = new THREE.GridHelper(24, 24, 0x1e293b, 0x111827);
+    // Configurable Studio Stage Floor Grid (dynamically updates divisions based on gridSize & snapToGrid)
+    let gridHelper = new THREE.GridHelper(24, 24, 0x38bdf8, 0x1e293b);
     gridHelper.position.y = -2.45;
     scene.add(gridHelper);
+    let currentGridKey = '24-true';
 
     const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
     const deviceRecords = new Map<string, Device3DAdapterRecord>();
@@ -493,7 +519,33 @@ export const Canvas3DSimulator: React.FC = () => {
       if (scene.fog instanceof THREE.FogExp2) {
         scene.fog.color.set(bgHex);
       }
-      gridHelper.visible = s.background.gridOverlay;
+
+      // Sync 3D Floor Grid divisions & highlight color with configurable gridSize & snapToGrid
+      const targetDivisions = Math.max(
+        8,
+        Math.min(96, Math.round(1920 / Math.max(8, s.gridSize || 40)))
+      );
+      const nextGridKey = `${targetDivisions}-${s.snapToGrid}`;
+      if (nextGridKey !== currentGridKey) {
+        currentGridKey = nextGridKey;
+        scene.remove(gridHelper);
+        gridHelper.geometry.dispose();
+        if (Array.isArray(gridHelper.material)) {
+          gridHelper.material.forEach((m) => m.dispose());
+        } else {
+          gridHelper.material.dispose();
+        }
+        gridHelper = new THREE.GridHelper(
+          24,
+          targetDivisions,
+          s.snapToGrid ? 0x38bdf8 : 0x1e293b,
+          s.snapToGrid ? 0x1e293b : 0x111827
+        );
+        gridHelper.position.y = -2.45;
+        scene.add(gridHelper);
+      }
+      gridHelper.visible =
+        !s.isPreviewMode && (s.background.gridOverlay || s.snapToGrid);
 
       // Sync studio lights
       keyLight.intensity = s.studio3D.keyLightIntensity;
@@ -593,10 +645,21 @@ export const Canvas3DSimulator: React.FC = () => {
           s.durationInFrames
         );
 
-        // Map 2D canvas X/Y offset relative to center into 3D stage coordinates
-        const worldX = ((resolved.x - s.canvasWidth / 2) / s.canvasWidth) * 6.5;
-        const worldY = (-(resolved.y - s.canvasHeight / 2) / s.canvasHeight) * 3.6;
-        const worldZ = resolved.pos3DZ || 0;
+        // Map 2D canvas X/Y offset relative to center into 3D stage coordinates (snapping to gridSize when snapToGrid is enabled)
+        const gridStep = Math.max(8, s.gridSize || 40);
+        const step3D = Math.max(0.1, Number(((gridStep / 160) * 1).toFixed(2)));
+        const effectiveX = s.snapToGrid
+          ? Math.round(resolved.x / gridStep) * gridStep
+          : resolved.x;
+        const effectiveY = s.snapToGrid
+          ? Math.round(resolved.y / gridStep) * gridStep
+          : resolved.y;
+        const worldX = ((effectiveX - s.canvasWidth / 2) / s.canvasWidth) * 6.5;
+        const worldY = (-(effectiveY - s.canvasHeight / 2) / s.canvasHeight) * 3.6;
+        const rawWorldZ = resolved.pos3DZ || 0;
+        const worldZ = s.snapToGrid
+          ? Number((Math.round(rawWorldZ / step3D) * step3D).toFixed(2))
+          : rawWorldZ;
 
         rec.group.position.x = THREE.MathUtils.damp(
           rec.group.position.x,
@@ -617,10 +680,18 @@ export const Canvas3DSimulator: React.FC = () => {
           dt
         );
 
-        const targetRotX = THREE.MathUtils.degToRad(resolved.rotation3DX || 0);
-        const targetRotY = THREE.MathUtils.degToRad(resolved.rotation3DY || 0);
+        const snapDeg = (deg: number) =>
+          s.snapToGrid && Math.abs(deg % 15) <= 4
+            ? Math.round(deg / 15) * 15
+            : deg;
+        const targetRotX = THREE.MathUtils.degToRad(
+          snapDeg(resolved.rotation3DX || 0)
+        );
+        const targetRotY = THREE.MathUtils.degToRad(
+          snapDeg(resolved.rotation3DY || 0)
+        );
         const targetRotZ = THREE.MathUtils.degToRad(
-          (resolved.rotation3DZ || 0) - resolved.rotation * 0.35
+          snapDeg(resolved.rotation3DZ || 0) - snapDeg(resolved.rotation) * 0.35
         );
 
         rec.group.rotation.x = THREE.MathUtils.damp(
@@ -785,13 +856,59 @@ export const Canvas3DSimulator: React.FC = () => {
   }, []);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button === 2) return;
+    if (contextMenu) setContextMenu(null);
+
+    const activeDevId =
+      storeState.selectedIds[0] || storeState.devices[0]?.id || null;
+    const activeDev = activeDevId
+      ? storeState.devices.find((d) => d.id === activeDevId)
+      : null;
+
+    if (e.shiftKey && activeDev && !activeDev.locked) {
+      orbitAnglesRef.current.isDragging = true;
+      orbitAnglesRef.current.dragMode = 'device';
+      orbitAnglesRef.current.dragDeviceId = activeDev.id;
+      orbitAnglesRef.current.startDevX = activeDev.x;
+      orbitAnglesRef.current.startDevY = activeDev.y;
+      orbitAnglesRef.current.startClientX = e.clientX;
+      orbitAnglesRef.current.startClientY = e.clientY;
+      return;
+    }
+
     orbitAnglesRef.current.isDragging = true;
+    orbitAnglesRef.current.dragMode = 'orbit';
+    orbitAnglesRef.current.dragDeviceId = null;
     orbitAnglesRef.current.lastX = e.clientX;
     orbitAnglesRef.current.lastY = e.clientY;
   };
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!orbitAnglesRef.current.isDragging) return;
+
+    if (
+      orbitAnglesRef.current.dragMode === 'device' &&
+      orbitAnglesRef.current.dragDeviceId
+    ) {
+      const dxClient = e.clientX - orbitAnglesRef.current.startClientX;
+      const dyClient = e.clientY - orbitAnglesRef.current.startClientY;
+      const rawNextX = orbitAnglesRef.current.startDevX + dxClient * 2.2;
+      const rawNextY = orbitAnglesRef.current.startDevY + dyClient * 2.2;
+      const step = Math.max(8, storeState.gridSize || 40);
+      const nextX = storeState.snapToGrid
+        ? Math.round(rawNextX / step) * step
+        : Math.round(rawNextX);
+      const nextY = storeState.snapToGrid
+        ? Math.round(rawNextY / step) * step
+        : Math.round(rawNextY);
+      storeState.updateDevice(
+        orbitAnglesRef.current.dragDeviceId,
+        { x: nextX, y: nextY },
+        false
+      );
+      return;
+    }
+
     const dx = e.clientX - orbitAnglesRef.current.lastX;
     const dy = e.clientY - orbitAnglesRef.current.lastY;
     orbitAnglesRef.current.lastX = e.clientX;
@@ -804,10 +921,30 @@ export const Canvas3DSimulator: React.FC = () => {
   };
 
   const handlePointerUp = () => {
+    if (
+      orbitAnglesRef.current.isDragging &&
+      orbitAnglesRef.current.dragMode === 'device'
+    ) {
+      storeState.pushHistory();
+    }
     orbitAnglesRef.current.isDragging = false;
+    orbitAnglesRef.current.dragMode = 'orbit';
+    orbitAnglesRef.current.dragDeviceId = null;
   };
 
-  const { studio3D, updateStudio3D, setCameraPreset3D } = storeState;
+  const {
+    studio3D,
+    updateStudio3D,
+    setCameraPreset3D,
+    snapToGrid,
+    toggleSnapToGrid,
+    gridSize,
+    setGridSize,
+    snapSelectedToGrid,
+    showRulers,
+    isPreviewMode,
+    selectedIds,
+  } = storeState;
 
   const cameraPresets: { id: CameraPresetId; label: string }[] = [
     { id: 'front', label: 'Front' },
@@ -821,8 +958,20 @@ export const Canvas3DSimulator: React.FC = () => {
   return (
     <div
       data-testid="canvas-3d-viewport"
+      onContextMenu={(e) => {
+        if ((e.target as HTMLElement).closest('[data-hud-overlay="true"]')) {
+          return;
+        }
+        e.preventDefault();
+        setContextMenu({ clientX: e.clientX, clientY: e.clientY });
+      }}
       className="relative flex-1 h-full bg-[#090D16] overflow-hidden select-none"
     >
+      {/* Coordinate-Mapped Horizontal & Vertical Viewport Rulers */}
+      {!isPreviewMode && (
+        <ViewportRulers containerRef={canvasMountRef} mode="3d" />
+      )}
+
       {/* Dedicated Isolated WebGL Mount Container */}
       <div
         ref={canvasMountRef}
@@ -834,21 +983,36 @@ export const Canvas3DSimulator: React.FC = () => {
       />
 
       {/* Top-Left Minimal Spec Header */}
-      <div className="absolute top-3 left-4 z-10 pointer-events-none flex items-center gap-2 text-xs text-slate-600 bg-white/95 border border-slate-200 rounded-md px-3 py-1.5 shadow-sm">
-        <span className="font-semibold text-slate-900">3D PBR Simulator</span>
-        <span aria-hidden="true">·</span>
-        <span className="font-mono tabular-nums">
-          FOV {studio3D.fov}° · {storeState.devices.filter((d) => d.visible).length} Active Meshes
-        </span>
-      </div>
+      {!isPreviewMode && (
+        <div
+          className={`absolute ${showRulers ? 'top-8 left-9' : 'top-3 left-4'} z-10 pointer-events-none flex items-center gap-2 text-xs text-slate-600 bg-white/95 border border-slate-200 rounded-md px-3 py-1.5 shadow-sm transition-all`}
+        >
+          <span className="font-semibold text-slate-900">3D PBR Simulator</span>
+          <span aria-hidden="true">·</span>
+          <span className="font-mono tabular-nums">
+            FOV {studio3D.fov}° · {storeState.devices.filter((d) => d.visible).length} Active Meshes
+          </span>
+          <span aria-hidden="true">·</span>
+          <span
+            data-testid="hud-3d-grid-status"
+            className={`font-mono tabular-nums ${
+              snapToGrid ? 'text-blue-600 font-semibold' : 'text-slate-400'
+            }`}
+          >
+            {snapToGrid ? `Grid Snap ${gridSize}px` : 'Free Space'}
+          </span>
+        </div>
+      )}
 
       {/* Unified Collapsible Bottom Control Dock */}
+      {!isPreviewMode && (
       <div
+        data-hud-overlay="true"
         style={{
           bottom: '16px',
           left: '50%',
           transform: 'translateX(-50%)',
-          maxWidth: 'min(920px, 94vw)',
+          maxWidth: 'min(1040px, 96vw)',
         }}
         className="absolute z-20 flex flex-col items-center"
       >
@@ -872,7 +1036,57 @@ export const Canvas3DSimulator: React.FC = () => {
         </button>
 
         {!dockCollapsed && (
-          <div className="flex flex-wrap items-center justify-center gap-4 px-4 py-2.5 bg-white border border-slate-200 rounded-xl shadow-lg">
+          <div className="flex flex-wrap items-center justify-center gap-3.5 px-4 py-2.5 bg-white border border-slate-200 rounded-xl shadow-lg">
+            {/* 3D Snap-to-Grid Toggle & Configurable Grid Size */}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={toggleSnapToGrid}
+                aria-pressed={snapToGrid}
+                title="Toggle 3D Snap to Grid (G) · Hold Shift+Drag in 3D to move device on grid"
+                data-testid="toggle-snap-to-grid-3d"
+                className={`px-2.5 py-1 rounded-md flex items-center gap-1 text-xs font-medium border transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                  snapToGrid
+                    ? 'bg-blue-50 text-blue-600 border-blue-200 font-semibold'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 border-slate-200'
+                }`}
+              >
+                <Grid3X3 className="w-3.5 h-3.5" />
+                <span>Snap</span>
+              </button>
+
+              <select
+                aria-label="3D Grid Size"
+                data-testid="select-grid-size-3d"
+                value={gridSize}
+                onChange={(e) => setGridSize(Number(e.target.value))}
+                title="Configurable 3D Stage Grid Size (px)"
+                className="bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-md px-1.5 py-1 text-xs font-mono tabular-nums text-slate-700 focus:outline-none focus:border-blue-500 cursor-pointer"
+              >
+                <option value={10}>10px</option>
+                <option value={20}>20px</option>
+                <option value={32}>32px</option>
+                <option value={40}>40px</option>
+                <option value={60}>60px</option>
+                <option value={80}>80px</option>
+                <option value={100}>100px</option>
+              </select>
+
+              {selectedIds.length > 0 && (
+                <button
+                  type="button"
+                  onClick={snapSelectedToGrid}
+                  title={`Align selected 3D device to ${gridSize}px grid`}
+                  data-testid="align-selection-to-grid-3d"
+                  className="px-2 py-1 text-xs font-medium text-blue-600 hover:bg-blue-50 border border-blue-200/80 rounded-md transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  Align
+                </button>
+              )}
+            </div>
+
+            <div className="w-px h-5 bg-slate-200" />
+
             {/* Camera Presets */}
             <div className="flex items-center gap-1">
               <Camera className="w-3.5 h-3.5 text-slate-500 mr-1" />
@@ -963,6 +1177,16 @@ export const Canvas3DSimulator: React.FC = () => {
           </div>
         )}
       </div>
+      )}
+
+      {/* Right-Click Viewport Context Menu */}
+      {!isPreviewMode && contextMenu && (
+        <ViewportContextMenu
+          clientX={contextMenu.clientX}
+          clientY={contextMenu.clientY}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 };

@@ -1798,6 +1798,11 @@ export const RightInspector: React.FC = () => {
     favoriteTransitionPresetIds,
     toggleFavoriteTransitionPreset,
     setLeftTab,
+    snapToGrid,
+    toggleSnapToGrid,
+    gridSize,
+    setGridSize,
+    snapSelectedToGrid,
   } = useStudioStore();
 
   const [activeTab, setActiveTab] = useState<InspectorTab>('transform');
@@ -4589,13 +4594,63 @@ export const RightInspector: React.FC = () => {
                 </button>
               </div>
 
+              {/* Snap-to-Grid Bar in Transform Inspector */}
+              <div
+                data-testid="inspector-snap-to-grid-bar"
+                className="flex items-center justify-between gap-2 bg-slate-50 px-2.5 py-1.5 rounded-md border border-slate-200"
+              >
+                <button
+                  type="button"
+                  onClick={toggleSnapToGrid}
+                  aria-pressed={snapToGrid}
+                  data-testid="inspector-snap-toggle"
+                  className={`flex items-center gap-1.5 px-2 py-1 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
+                    snapToGrid
+                      ? 'bg-blue-600 text-white border-blue-600 font-semibold'
+                      : 'bg-white text-slate-600 border-slate-200 hover:text-slate-900'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>{snapToGrid ? 'Snap On' : 'Snap Off'}</span>
+                </button>
+
+                <div className="flex items-center gap-1.5">
+                  <select
+                    aria-label="Inspector Grid Size"
+                    data-testid="inspector-grid-size-select"
+                    value={gridSize}
+                    onChange={(e) => setGridSize(Number(e.target.value))}
+                    className="bg-white border border-slate-200 rounded px-1.5 py-1 text-[11px] font-mono tabular-nums text-slate-700 cursor-pointer"
+                  >
+                    <option value={10}>10px</option>
+                    <option value={20}>20px</option>
+                    <option value={32}>32px</option>
+                    <option value={40}>40px</option>
+                    <option value={60}>60px</option>
+                    <option value={80}>80px</option>
+                    <option value={100}>100px</option>
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={snapSelectedToGrid}
+                    data-testid="inspector-align-to-grid"
+                    title={`Snap device coordinates to ${gridSize}px grid`}
+                    className="px-2 py-1 rounded text-[11px] font-semibold bg-white hover:bg-blue-50 text-blue-600 border border-blue-200 transition-colors cursor-pointer"
+                  >
+                    Align
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="text-[11px] font-medium text-slate-600 block mb-1">
-                    Position X
+                    Position X {snapToGrid ? `(${gridSize}px step)` : ''}
                   </label>
                   <input
                     type="number"
+                    step={snapToGrid ? gridSize : 1}
                     value={Math.round(selectedDevice.x)}
                     onChange={(e) =>
                       updateDevice(selectedDevice.id, {
@@ -4607,10 +4662,11 @@ export const RightInspector: React.FC = () => {
                 </div>
                 <div>
                   <label className="text-[11px] font-medium text-slate-600 block mb-1">
-                    Position Y
+                    Position Y {snapToGrid ? `(${gridSize}px step)` : ''}
                   </label>
                   <input
                     type="number"
+                    step={snapToGrid ? gridSize : 1}
                     value={Math.round(selectedDevice.y)}
                     onChange={(e) =>
                       updateDevice(selectedDevice.id, {

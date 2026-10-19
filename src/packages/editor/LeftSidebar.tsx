@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -35,6 +35,7 @@ import {
   Upload,
   Video,
   Wand2,
+  X,
 } from 'lucide-react';
 import {
   BACKGROUND_PRESETS,
@@ -189,6 +190,7 @@ export const LeftSidebar: React.FC = () => {
   } = useStudioStore();
 
   const [search, setSearch] = useState('');
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const [activeCategory, setActiveCategory] = useState<DeviceCategory | 'all'>(
     'all'
   );
@@ -201,6 +203,29 @@ export const LeftSidebar: React.FC = () => {
   const [swatchCategoryFilter, setSwatchCategoryFilter] = useState<
     'all' | 'Apple' | 'Material' | 'Neon' | 'Pastel' | 'Dark' | 'Metallic'
   >('all');
+
+  // Press '/' to quickly focus the LeftSidebar search bar when not typing in an input
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === '/' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        const isEditable = (e.target as HTMLElement | null)?.isContentEditable;
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          isEditable
+        ) {
+          return;
+        }
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Webcam Studio local state
   const [webcamShapeSearch, setWebcamShapeSearch] = useState('');
@@ -323,16 +348,207 @@ export const LeftSidebar: React.FC = () => {
     }
   };
 
+  const normalizedSearch = search.trim().toLowerCase();
+
+  const matchesQuery = (
+    ...fields: (string | number | undefined | null)[]
+  ): boolean => {
+    if (!normalizedSearch) return true;
+    return fields.some(
+      (f) => f !== undefined && f !== null && String(f).toLowerCase().includes(normalizedSearch)
+    );
+  };
+
   const filteredDevices = useMemo(() => {
     return DEVICE_CATALOG.filter((item) => {
       const matchesCat =
         activeCategory === 'all' || item.category === activeCategory;
       const matchesSearch =
-        item.name.toLowerCase().includes(search.toLowerCase()) ||
-        item.brand.toLowerCase().includes(search.toLowerCase());
+        !normalizedSearch ||
+        item.name.toLowerCase().includes(normalizedSearch) ||
+        item.brand.toLowerCase().includes(normalizedSearch) ||
+        item.category.toLowerCase().includes(normalizedSearch) ||
+        (item.badge && item.badge.toLowerCase().includes(normalizedSearch)) ||
+        `${item.width}x${item.height}`.includes(normalizedSearch) ||
+        `${item.width}×${item.height}`.includes(normalizedSearch);
       return matchesCat && matchesSearch;
     });
-  }, [search, activeCategory]);
+  }, [normalizedSearch, activeCategory]);
+
+  // Flatten searchable Studio Components & Assets across tabs for cross-tab discovery
+  const quickMatchComponents = useMemo(() => {
+    if (!normalizedSearch) return [];
+    const results: {
+      id: string;
+      label: string;
+      sublabel: string;
+      tab: LeftSidebarTab;
+      tabLabel: string;
+      onSelect: () => void;
+    }[] = [];
+
+    // 1. Devices
+    DEVICE_CATALOG.forEach((dev) => {
+      if (
+        dev.name.toLowerCase().includes(normalizedSearch) ||
+        dev.brand.toLowerCase().includes(normalizedSearch) ||
+        dev.category.toLowerCase().includes(normalizedSearch) ||
+        (dev.badge && dev.badge.toLowerCase().includes(normalizedSearch))
+      ) {
+        results.push({
+          id: `dev-${dev.id}`,
+          label: dev.name,
+          sublabel: `${dev.brand} · ${dev.width}×${dev.height}`,
+          tab: 'devices',
+          tabLabel: 'Device',
+          onSelect: () => addDevice(dev.id),
+        });
+      }
+    });
+
+    // 2. Draw & Annotate Tools / Components
+    const drawComponents: {
+      id: DrawableToolType;
+      label: string;
+      group: string;
+    }[] = [
+      { id: 'rect', label: 'Rectangle', group: 'Geometric Shape' },
+      { id: 'rounded-rect', label: 'Rounded Rect', group: 'Geometric Shape' },
+      { id: 'circle', label: 'Circle', group: 'Geometric Shape' },
+      { id: 'ellipse', label: 'Ellipse', group: 'Geometric Shape' },
+      { id: 'line', label: 'Line', group: 'Geometric Shape' },
+      { id: 'arrow', label: 'Arrow / Callout Arrow', group: 'Annotation' },
+      { id: 'curved-arrow', label: 'Curved Arrow', group: 'Annotation' },
+      { id: 'polygon', label: 'Polygon', group: 'Geometric Shape' },
+      { id: 'star', label: 'Star', group: 'Geometric Shape' },
+      { id: 'triangle', label: 'Triangle', group: 'Geometric Shape' },
+      { id: 'diamond', label: 'Diamond', group: 'Geometric Shape' },
+      { id: 'text', label: 'Text Label', group: 'Annotation' },
+      { id: 'callout-box', label: 'Callout Box', group: 'Annotation' },
+      { id: 'highlight-stroke', label: 'Highlight Stroke', group: 'Annotation' },
+      { id: 'neon-path', label: 'Neon Path', group: 'Animated Effect' },
+      { id: 'glow-outline', label: 'Glow Outline', group: 'Animated Effect' },
+      { id: 'animated-stroke', label: 'Animated Stroke', group: 'Animated Effect' },
+      { id: 'pulse-ring', label: 'Pulse Ring', group: 'Animated Effect' },
+    ];
+    drawComponents.forEach((dc) => {
+      if (
+        dc.label.toLowerCase().includes(normalizedSearch) ||
+        dc.group.toLowerCase().includes(normalizedSearch) ||
+        dc.id.toLowerCase().includes(normalizedSearch)
+      ) {
+        results.push({
+          id: `draw-${dc.id}`,
+          label: dc.label,
+          sublabel: dc.group,
+          tab: 'draw',
+          tabLabel: 'Draw',
+          onSelect: () => handleQuickCreateDrawing(dc.id),
+        });
+      }
+    });
+
+    // 3. Webcam Shapes & Styles
+    WEBCAM_SHAPE_LIBRARY.forEach((sh) => {
+      if (
+        sh.name.toLowerCase().includes(normalizedSearch) ||
+        sh.category.toLowerCase().includes(normalizedSearch) ||
+        sh.id.toLowerCase().includes(normalizedSearch)
+      ) {
+        results.push({
+          id: `wc-shape-${sh.id}`,
+          label: `${sh.name} Mask`,
+          sublabel: `Webcam ${sh.category} shape`,
+          tab: 'webcam',
+          tabLabel: 'Webcam',
+          onSelect: () => handleSelectWebcamShape(sh.id),
+        });
+      }
+    });
+
+    // 4. Media Assets
+    mediaAssets.forEach((asset) => {
+      if (
+        asset.name.toLowerCase().includes(normalizedSearch) ||
+        asset.type.toLowerCase().includes(normalizedSearch)
+      ) {
+        results.push({
+          id: `media-${asset.id}`,
+          label: asset.name,
+          sublabel: `${asset.type.toUpperCase()} · ${asset.width}×${asset.height}`,
+          tab: 'media',
+          tabLabel: 'Media',
+          onSelect: () => {
+            if (selectedDevice) {
+              assignMediaToDevice(selectedDevice.id, asset.id);
+            } else {
+              setLeftTab('media');
+            }
+          },
+        });
+      }
+    });
+
+    // 5. Background Presets
+    BACKGROUND_PRESETS.forEach((bp) => {
+      if (bp.name.toLowerCase().includes(normalizedSearch)) {
+        results.push({
+          id: `bg-${bp.id}`,
+          label: bp.name,
+          sublabel: 'Atmosphere Background Preset',
+          tab: 'backgrounds',
+          tabLabel: 'Background',
+          onSelect: () => applyBackgroundPreset(bp.id),
+        });
+      }
+    });
+
+    // 6. Theme Palettes & Finishes
+    GLOBAL_THEME_PALETTES.forEach((pal) => {
+      if (
+        pal.name.toLowerCase().includes(normalizedSearch) ||
+        (pal.category && pal.category.toLowerCase().includes(normalizedSearch))
+      ) {
+        results.push({
+          id: `theme-${pal.id}`,
+          label: pal.name,
+          sublabel: `${pal.category || 'Custom'} Studio Palette`,
+          tab: 'themes',
+          tabLabel: 'Theme',
+          onSelect: () => applyThemePalette(pal.id, themeScope),
+        });
+      }
+    });
+
+    DEVICE_FRAME_SWATCHES.forEach((sw) => {
+      if (sw.name.toLowerCase().includes(normalizedSearch)) {
+        results.push({
+          id: `swatch-${sw.id}`,
+          label: sw.name,
+          sublabel: 'Hardware Chassis Finish',
+          tab: 'themes',
+          tabLabel: 'Finish',
+          onSelect: () => {
+            if (selectedDevice) {
+              applyDeviceSwatch(selectedDevice.id, sw.id);
+            }
+          },
+        });
+      }
+    });
+
+    return results;
+  }, [
+    normalizedSearch,
+    mediaAssets,
+    selectedDevice,
+    themeScope,
+    addDevice,
+    assignMediaToDevice,
+    applyBackgroundPreset,
+    applyThemePalette,
+    applyDeviceSwatch,
+  ]);
 
   // Quick-place helper for Draw Panel shapes/annotations so users can either drag on canvas OR click to place
   const handleQuickCreateDrawing = (tool: DrawableToolType, labelOverride?: string) => {
@@ -515,6 +731,159 @@ export const LeftSidebar: React.FC = () => {
 
       {/* Focused Content Panel */}
       <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden bg-white">
+        {/* TOP PERSISTENT SEARCH BAR FOR DEVICE ASSETS & STUDIO COMPONENTS */}
+        <div
+          data-testid="left-sidebar-search-bar"
+          className="p-3 border-b border-slate-200 bg-slate-50/70 space-y-2 shrink-0"
+        >
+          <div className="relative flex items-center">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              ref={searchInputRef}
+              type="text"
+              data-testid="left-sidebar-search-input"
+              aria-label="Search device assets and studio components"
+              placeholder={
+                effectiveTab === 'devices'
+                  ? 'Search iPhone, MacBook, Pixel, components...'
+                  : effectiveTab === 'webcam'
+                    ? 'Search webcam shapes, frames, PiP layouts...'
+                    : effectiveTab === 'draw'
+                      ? 'Search shapes, arrows, callouts, neon effects...'
+                      : effectiveTab === 'media'
+                        ? 'Search screen recordings, videos, images...'
+                        : effectiveTab === 'backgrounds'
+                          ? 'Search backdrops, patterns, atmosphere...'
+                          : effectiveTab === 'themes'
+                            ? 'Search themes, titanium, neon finishes...'
+                            : 'Search scene layers, devices, presets...'
+              }
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                if (effectiveTab === 'webcam') {
+                  setWebcamShapeSearch(e.target.value);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape' && search) {
+                  e.stopPropagation();
+                  setSearch('');
+                  setWebcamShapeSearch('');
+                }
+              }}
+              className="w-full bg-white border border-slate-200 rounded-lg pl-8 pr-14 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/15 transition-all shadow-2xs"
+            />
+            {search ? (
+              <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                <span
+                  data-testid="left-sidebar-search-count"
+                  className="px-1.5 py-0.5 rounded bg-blue-50 text-blue-600 border border-blue-200 text-[10px] font-mono font-semibold"
+                >
+                  {effectiveTab === 'devices'
+                    ? filteredDevices.length
+                    : quickMatchComponents.length}
+                </span>
+                <button
+                  type="button"
+                  data-testid="left-sidebar-search-clear"
+                  onClick={() => {
+                    setSearch('');
+                    setWebcamShapeSearch('');
+                    searchInputRef.current?.focus();
+                  }}
+                  title="Clear search (Esc)"
+                  className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ) : (
+              <span
+                title="Press / to search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-400 pointer-events-none"
+              >
+                /
+              </span>
+            )}
+          </div>
+
+          {/* Cross-Tab Component Match Pills when searching */}
+          {normalizedSearch && (
+            <div className="flex items-center justify-between gap-1.5 pt-0.5">
+              <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
+                {(
+                  [
+                    {
+                      id: 'devices' as LeftSidebarTab,
+                      label: 'Devices',
+                      count: filteredDevices.length,
+                    },
+                    {
+                      id: 'draw' as LeftSidebarTab,
+                      label: 'Draw',
+                      count: quickMatchComponents.filter((c) => c.tab === 'draw')
+                        .length,
+                    },
+                    {
+                      id: 'webcam' as LeftSidebarTab,
+                      label: 'Webcam',
+                      count: quickMatchComponents.filter(
+                        (c) => c.tab === 'webcam'
+                      ).length,
+                    },
+                    {
+                      id: 'themes' as LeftSidebarTab,
+                      label: 'Themes',
+                      count: quickMatchComponents.filter(
+                        (c) => c.tab === 'themes'
+                      ).length,
+                    },
+                    {
+                      id: 'backgrounds' as LeftSidebarTab,
+                      label: 'Backdrops',
+                      count: quickMatchComponents.filter(
+                        (c) => c.tab === 'backgrounds'
+                      ).length,
+                    },
+                    {
+                      id: 'media' as LeftSidebarTab,
+                      label: 'Media',
+                      count: quickMatchComponents.filter(
+                        (c) => c.tab === 'media'
+                      ).length,
+                    },
+                  ] as const
+                )
+                  .filter((pill) => pill.count > 0 || pill.id === effectiveTab)
+                  .map((pill) => (
+                    <button
+                      key={pill.id}
+                      type="button"
+                      onClick={() => setLeftTab(pill.id)}
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-semibold flex items-center gap-1 shrink-0 transition-colors cursor-pointer border ${
+                        effectiveTab === pill.id
+                          ? 'bg-blue-600 text-white border-blue-600'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-blue-300 hover:text-blue-600'
+                      }`}
+                    >
+                      <span>{pill.label}</span>
+                      <span
+                        className={`font-mono text-[9px] px-1 rounded-full ${
+                          effectiveTab === pill.id
+                            ? 'bg-blue-700 text-white'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {pill.count}
+                      </span>
+                    </button>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* 1. DEVICES TAB */}
         {effectiveTab === 'devices' && (
           <>
@@ -528,39 +897,18 @@ export const LeftSidebar: React.FC = () => {
                 </span>
               </div>
 
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Search iPhone, MacBook, Pixel..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-md pl-8 pr-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-500 focus:bg-white transition-colors"
-                />
-              </div>
-
               <div className="flex flex-wrap gap-1">
-                <button
-                  onClick={() => setActiveCategory('all')}
-                  className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                    activeCategory === 'all'
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
-                  }`}
-                >
-                  All
-                </button>
                 {DEVICE_CATEGORIES.map((c) => (
                   <button
                     key={c.id}
                     onClick={() => setActiveCategory(c.id)}
-                    className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                    className={`px-2 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
                       activeCategory === c.id
                         ? 'bg-blue-600 text-white'
                         : 'bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
                     }`}
                   >
-                    {c.label}
+                    {c.id === 'all' ? 'All' : c.label}
                   </button>
                 ))}
               </div>
@@ -570,6 +918,7 @@ export const LeftSidebar: React.FC = () => {
               {filteredDevices.map((item) => (
                 <div
                   key={item.id}
+                  data-testid={`device-catalog-item-${item.id}`}
                   onClick={() => addDevice(item.id)}
                   className="group p-2.5 rounded-lg bg-white hover:bg-blue-50/40 border border-slate-200 hover:border-blue-300 transition-all cursor-pointer flex items-center gap-3 shadow-2xs"
                 >
@@ -615,6 +964,90 @@ export const LeftSidebar: React.FC = () => {
                   </div>
                 </div>
               ))}
+
+              {filteredDevices.length === 0 && (
+                <div
+                  data-testid="device-search-empty-state"
+                  className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-center space-y-2"
+                >
+                  <p className="text-xs font-semibold text-slate-700">
+                    No matching devices found
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    No hardware models matched &ldquo;{search}&rdquo; in{' '}
+                    {activeCategory === 'all' ? 'All Devices' : activeCategory}.
+                  </p>
+                  <div className="flex items-center justify-center gap-2 pt-1">
+                    {activeCategory !== 'all' && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveCategory('all')}
+                        className="px-2.5 py-1 rounded-md bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold cursor-pointer"
+                      >
+                        Search All Categories
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearch('');
+                        setActiveCategory('all');
+                      }}
+                      className="px-2.5 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-semibold cursor-pointer"
+                    >
+                      Reset Filter
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Cross-Studio Component Matches when searching from Devices tab */}
+              {normalizedSearch &&
+                quickMatchComponents.filter((c) => c.tab !== 'devices').length >
+                  0 && (
+                  <div className="pt-3 border-t border-slate-200 space-y-2">
+                    <div className="flex items-center justify-between px-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                        Matching Studio Components
+                      </span>
+                      <span className="text-[10px] font-mono text-blue-600">
+                        {
+                          quickMatchComponents.filter(
+                            (c) => c.tab !== 'devices'
+                          ).length
+                        }{' '}
+                        found
+                      </span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {quickMatchComponents
+                        .filter((c) => c.tab !== 'devices')
+                        .slice(0, 8)
+                        .map((comp) => (
+                          <div
+                            key={comp.id}
+                            onClick={comp.onSelect}
+                            className="p-2 rounded-lg bg-slate-50 hover:bg-blue-50/50 border border-slate-200 hover:border-blue-300 flex items-center justify-between gap-2 cursor-pointer transition-all"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-xs font-semibold text-slate-800 truncate">
+                                  {comp.label}
+                                </span>
+                                <span className="px-1.5 py-0.5 rounded bg-white border border-slate-200 text-[9px] font-semibold uppercase text-slate-600">
+                                  {comp.tabLabel}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 truncate">
+                                {comp.sublabel}
+                              </div>
+                            </div>
+                            <Plus className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
             </div>
           </>
         )}
@@ -853,13 +1286,14 @@ export const LeftSidebar: React.FC = () => {
                   const matchCat =
                     webcamShapeCat === 'all' ||
                     sh.category.toLowerCase() === webcamShapeCat;
+                  const activeQuery = (webcamShapeSearch || search)
+                    .trim()
+                    .toLowerCase();
                   const matchSearch =
-                    sh.name
-                      .toLowerCase()
-                      .includes(webcamShapeSearch.toLowerCase()) ||
-                    sh.id
-                      .toLowerCase()
-                      .includes(webcamShapeSearch.toLowerCase());
+                    !activeQuery ||
+                    sh.name.toLowerCase().includes(activeQuery) ||
+                    sh.id.toLowerCase().includes(activeQuery) ||
+                    sh.category.toLowerCase().includes(activeQuery);
                   return matchCat && matchSearch;
                 }).map((sh) => {
                   const isSelected = selectedWebcam?.shape === sh.id;
@@ -1031,7 +1465,9 @@ export const LeftSidebar: React.FC = () => {
                 Decorative Frame Styles
               </label>
               <div className="grid grid-cols-2 gap-1.5">
-                {WEBCAM_STYLE_PRESETS.map((st) => {
+                {WEBCAM_STYLE_PRESETS.filter((st) =>
+                  matchesQuery(st.name, st.badge, st.id)
+                ).map((st) => {
                   const isSel = selectedWebcam?.stylePreset === st.id;
                   return (
                     <button
@@ -1084,7 +1520,9 @@ export const LeftSidebar: React.FC = () => {
                 )}
               </div>
               <div className="grid grid-cols-2 gap-1.5">
-                {WEBCAM_PIP_PRESETS.map((pip) => (
+                {WEBCAM_PIP_PRESETS.filter((pip) =>
+                  matchesQuery(pip.name, pip.description, pip.id)
+                ).map((pip) => (
                   <button
                     key={pip.id}
                     onClick={() => {
@@ -1142,22 +1580,24 @@ export const LeftSidebar: React.FC = () => {
                     { id: 'pan', label: 'Pan' },
                     { id: 'transform', label: 'Transform' },
                   ] as { id: DrawingToolType; label: string }[]
-                ).map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => {
-                      setEditorMode('2d');
-                      setActiveDrawingTool(t.id);
-                    }}
-                    className={`py-1.5 px-1 rounded text-[10px] font-semibold border transition-all cursor-pointer ${
-                      activeDrawingTool === t.id
-                        ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                ))}
+                )
+                  .filter((t) => matchesQuery(t.label, t.id, 'selection', 'transform'))
+                  .map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        setEditorMode('2d');
+                        setActiveDrawingTool(t.id);
+                      }}
+                      className={`py-1.5 px-1 rounded text-[10px] font-semibold border transition-all cursor-pointer ${
+                        activeDrawingTool === t.id
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
               </div>
             </div>
 
@@ -1185,33 +1625,35 @@ export const LeftSidebar: React.FC = () => {
                     { id: 'triangle', label: 'Triangle' },
                     { id: 'diamond', label: 'Diamond' },
                   ] as { id: DrawableToolType; label: string }[]
-                ).map((t) => (
-                  <div
-                    key={t.id}
-                    className={`flex items-center justify-between rounded-md border px-2 py-1 text-[11px] transition-all ${
-                      activeDrawingTool === t.id
-                        ? 'bg-blue-50 border-blue-500 text-blue-700 font-semibold'
-                        : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
-                    }`}
-                  >
-                    <button
-                      onClick={() => {
-                        setEditorMode('2d');
-                        setActiveDrawingTool(t.id);
-                      }}
-                      className="flex-1 text-left truncate cursor-pointer"
+                )
+                  .filter((t) => matchesQuery(t.label, t.id, 'shape', 'geometric'))
+                  .map((t) => (
+                    <div
+                      key={t.id}
+                      className={`flex items-center justify-between rounded-md border px-2 py-1 text-[11px] transition-all ${
+                        activeDrawingTool === t.id
+                          ? 'bg-blue-50 border-blue-500 text-blue-700 font-semibold'
+                          : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
+                      }`}
                     >
-                      {t.label}
-                    </button>
-                    <button
-                      onClick={() => handleQuickCreateDrawing(t.id)}
-                      title={`Place ${t.label} onto Canvas`}
-                      className="ml-1 p-0.5 rounded hover:bg-blue-100 text-slate-400 hover:text-blue-600"
-                    >
-                      <Plus className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
+                      <button
+                        onClick={() => {
+                          setEditorMode('2d');
+                          setActiveDrawingTool(t.id);
+                        }}
+                        className="flex-1 text-left truncate cursor-pointer"
+                      >
+                        {t.label}
+                      </button>
+                      <button
+                        onClick={() => handleQuickCreateDrawing(t.id)}
+                        title={`Place ${t.label} onto Canvas`}
+                        className="ml-1 p-0.5 rounded hover:bg-blue-100 text-slate-400 hover:text-blue-600"
+                      >
+                        <Plus className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
               </div>
             </div>
 
@@ -1229,22 +1671,24 @@ export const LeftSidebar: React.FC = () => {
                     { id: 'freehand', label: 'Freehand Path' },
                     { id: 'eraser', label: 'Eraser' },
                   ] as { id: DrawingToolType; label: string }[]
-                ).map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => {
-                      setEditorMode('2d');
-                      setActiveDrawingTool(t.id);
-                    }}
-                    className={`py-1.5 px-2 rounded-md text-[11px] font-medium border transition-all cursor-pointer ${
-                      activeDrawingTool === t.id
-                        ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-2xs'
-                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                ))}
+                )
+                  .filter((t) => matchesQuery(t.label, t.id, 'freehand', 'curve'))
+                  .map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        setEditorMode('2d');
+                        setActiveDrawingTool(t.id);
+                      }}
+                      className={`py-1.5 px-2 rounded-md text-[11px] font-medium border transition-all cursor-pointer ${
+                        activeDrawingTool === t.id
+                          ? 'bg-blue-600 text-white border-blue-600 font-semibold shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
               </div>
             </div>
 
@@ -1281,35 +1725,37 @@ export const LeftSidebar: React.FC = () => {
                     { id: 'callout-box', label: 'Callout Box' },
                     { id: 'highlight-stroke', label: 'Highlight Stroke' },
                   ] as { id: DrawableToolType; label: string }[]
-                ).map((t) => (
-                  <div
-                    key={t.id}
-                    className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-[11px] ${
-                      activeDrawingTool === t.id
-                        ? 'bg-blue-50 border-blue-500 text-blue-700 font-semibold'
-                        : 'bg-white border-slate-200 text-slate-700'
-                    }`}
-                  >
-                    <button
-                      onClick={() => {
-                        setEditorMode('2d');
-                        setActiveDrawingTool(t.id);
-                      }}
-                      className="flex-1 text-left truncate cursor-pointer"
+                )
+                  .filter((t) => matchesQuery(t.label, t.id, 'annotation', 'callout'))
+                  .map((t) => (
+                    <div
+                      key={t.id}
+                      className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 text-[11px] ${
+                        activeDrawingTool === t.id
+                          ? 'bg-blue-50 border-blue-500 text-blue-700 font-semibold'
+                          : 'bg-white border-slate-200 text-slate-700'
+                      }`}
                     >
-                      {t.label}
-                    </button>
-                    <button
-                      onClick={() =>
-                        handleQuickCreateDrawing(t.id, annotationText)
-                      }
-                      title={`Insert ${t.label}`}
-                      className="ml-1 px-1.5 py-0.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-600 text-[10px] font-semibold"
-                    >
-                      +Add
-                    </button>
-                  </div>
-                ))}
+                      <button
+                        onClick={() => {
+                          setEditorMode('2d');
+                          setActiveDrawingTool(t.id);
+                        }}
+                        className="flex-1 text-left truncate cursor-pointer"
+                      >
+                        {t.label}
+                      </button>
+                      <button
+                        onClick={() =>
+                          handleQuickCreateDrawing(t.id, annotationText)
+                        }
+                        title={`Insert ${t.label}`}
+                        className="ml-1 px-1.5 py-0.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-600 text-[10px] font-semibold"
+                      >
+                        +Add
+                      </button>
+                    </div>
+                  ))}
               </div>
             </div>
 
@@ -1327,16 +1773,18 @@ export const LeftSidebar: React.FC = () => {
                     { id: 'animated-stroke', label: 'Animated Stroke' },
                     { id: 'pulse-ring', label: 'Pulse Ring' },
                   ] as { id: DrawableToolType; label: string }[]
-                ).map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => handleQuickCreateDrawing(t.id)}
-                    className="py-1.5 px-2.5 rounded-md bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 text-left text-[11px] font-medium text-slate-700 flex items-center justify-between cursor-pointer"
-                  >
-                    <span>{t.label}</span>
-                    <Plus className="w-3 h-3 text-blue-600" />
-                  </button>
-                ))}
+                )
+                  .filter((t) => matchesQuery(t.label, t.id, 'neon', 'glow', 'effect'))
+                  .map((t) => (
+                    <button
+                      key={t.id}
+                      onClick={() => handleQuickCreateDrawing(t.id)}
+                      className="py-1.5 px-2.5 rounded-md bg-white hover:bg-blue-50 border border-slate-200 hover:border-blue-300 text-left text-[11px] font-medium text-slate-700 flex items-center justify-between cursor-pointer"
+                    >
+                      <span>{t.label}</span>
+                      <Plus className="w-3 h-3 text-blue-600" />
+                    </button>
+                  ))}
               </div>
 
               {selectedDevice && (
@@ -1529,7 +1977,11 @@ export const LeftSidebar: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto p-3 space-y-2">
-              {mediaAssets.map((asset) => {
+              {mediaAssets
+                .filter((asset) =>
+                  matchesQuery(asset.name, asset.type, `${asset.width}x${asset.height}`)
+                )
+                .map((asset) => {
                 const isAssigned = selectedDevice?.mediaId === asset.id;
                 return (
                   <div
@@ -2076,7 +2528,9 @@ export const LeftSidebar: React.FC = () => {
                 Curated Atmosphere Presets
               </label>
               <div className="grid grid-cols-2 gap-2">
-                {BACKGROUND_PRESETS.map((bp) => (
+                {BACKGROUND_PRESETS.filter((bp) =>
+                  matchesQuery(bp.name, bp.id, bp.background.type)
+                ).map((bp) => (
                   <button
                     key={bp.id}
                     onClick={() => applyBackgroundPreset(bp.id)}
@@ -2142,7 +2596,9 @@ export const LeftSidebar: React.FC = () => {
                 1-Click Studio Palettes
               </label>
               <div className="grid grid-cols-2 gap-2">
-                {GLOBAL_THEME_PALETTES.map((pal) => (
+                {GLOBAL_THEME_PALETTES.filter((pal) =>
+                  matchesQuery(pal.name, pal.category, pal.id)
+                ).map((pal) => (
                   <button
                     key={pal.id}
                     onClick={() => applyThemePalette(pal.id, themeScope)}
@@ -2179,7 +2635,9 @@ export const LeftSidebar: React.FC = () => {
                 Hardware Chassis Finishes
               </label>
               <div className="grid grid-cols-4 gap-1.5">
-                {DEVICE_FRAME_SWATCHES.map((sw) => (
+                {DEVICE_FRAME_SWATCHES.filter((sw) =>
+                  matchesQuery(sw.name, sw.id)
+                ).map((sw) => (
                   <button
                     key={sw.id}
                     onClick={() => {
@@ -2277,6 +2735,7 @@ export const LeftSidebar: React.FC = () => {
                     Webcam Overlays ({webcams.length})
                   </div>
                   {[...webcams]
+                    .filter((wc) => matchesQuery(wc.name, wc.shape, 'webcam'))
                     .sort((a, b) => b.zIndex - a.zIndex)
                     .map((wc) => {
                       const isSel = selectedWebcamId === wc.id;
@@ -2342,6 +2801,7 @@ export const LeftSidebar: React.FC = () => {
                     Drawings & Annotations ({drawings.length})
                   </div>
                   {[...drawings]
+                    .filter((dr) => matchesQuery(dr.name, dr.tool, dr.text, 'drawing'))
                     .sort((a, b) => b.zIndex - a.zIndex)
                     .map((dr) => {
                       const isSel = selectedDrawingId === dr.id;
@@ -2406,6 +2866,7 @@ export const LeftSidebar: React.FC = () => {
                   Device Mockups ({devices.length})
                 </div>
                 {[...devices]
+                  .filter((dev) => matchesQuery(dev.name, dev.presetId, 'device'))
                   .sort((a, b) => b.zIndex - a.zIndex)
                   .map((dev) => {
                     const isSel = selectedIds.includes(dev.id);
@@ -2498,36 +2959,39 @@ export const LeftSidebar: React.FC = () => {
                 <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 px-1">
                   Background Stack ({bgLayers.length})
                 </div>
-                {[...bgLayers].reverse().map((layer) => (
-                  <div
-                    key={layer.id}
-                    onClick={() => {
-                      selectBackgroundLayer(layer.id);
-                      setLeftTab('backgrounds');
-                    }}
-                    className="flex items-center justify-between p-2 rounded-lg border border-slate-200 bg-slate-50/70 hover:bg-slate-100 text-xs text-slate-700 cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Palette className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                      <span className="truncate">{layer.name}</span>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        updateBackgroundLayer(layer.id, {
-                          visible: !layer.visible,
-                        });
+                {[...bgLayers]
+                  .reverse()
+                  .filter((layer) => matchesQuery(layer.name, layer.kind, 'background'))
+                  .map((layer) => (
+                    <div
+                      key={layer.id}
+                      onClick={() => {
+                        selectBackgroundLayer(layer.id);
+                        setLeftTab('backgrounds');
                       }}
-                      className="p-1 rounded hover:bg-slate-200/70 text-slate-500"
+                      className="flex items-center justify-between p-2 rounded-lg border border-slate-200 bg-slate-50/70 hover:bg-slate-100 text-xs text-slate-700 cursor-pointer"
                     >
-                      {layer.visible ? (
-                        <Eye className="w-3.5 h-3.5" />
-                      ) : (
-                        <EyeOff className="w-3.5 h-3.5 text-slate-300" />
-                      )}
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Palette className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span className="truncate">{layer.name}</span>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          updateBackgroundLayer(layer.id, {
+                            visible: !layer.visible,
+                          });
+                        }}
+                        className="p-1 rounded hover:bg-slate-200/70 text-slate-500"
+                      >
+                        {layer.visible ? (
+                          <Eye className="w-3.5 h-3.5" />
+                        ) : (
+                          <EyeOff className="w-3.5 h-3.5 text-slate-300" />
+                        )}
+                      </button>
+                    </div>
+                  ))}
               </div>
             </div>
           </div>
